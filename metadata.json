@@ -1,0 +1,7 @@
+{
+  "name": "SBF-DEG",
+  "description": "Plateforme de gestion documentaire pour le BTP avec suivi des validations, génération de bordereaux et outils IA (Gemini & Veo) pour l'assistance technique et visuelle.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
