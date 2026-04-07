@@ -5,8 +5,11 @@ import { BordereauView } from './components/BordereauView';
 import { SettingsView } from './components/SettingsView';
 import { Dashboard } from './components/Dashboard';
 import { BTPDocument, ApprovalStatus } from './types';
-import { fetchDocumentsFromSheet, saveDocumentsToSheet } from './services/googleSheetService';
 import { Loader2 } from 'lucide-react';
+import { useAuth } from './context/AuthContext';
+import { Login } from './components/Login';
+import { firestoreService } from './services/firestoreService';
+import toast, { Toaster } from 'react-hot-toast';
 
 const INITIAL_DOCS: BTPDocument[] = [
   {
@@ -83,100 +86,112 @@ export default function App() {
   const [bordereauSelectedDocs, setBordereauSelectedDocs] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const { user, loading: authLoading } = useAuth();
+  
+  // THEME MANAGEMENT (Dark mode by default)
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+      const saved = localStorage.getItem('sbf-theme');
+      return (saved as 'light' | 'dark') || 'dark';
+  });
+
+  useEffect(() => {
+      document.documentElement.classList.remove('light', 'dark');
+      document.documentElement.classList.add(theme);
+      localStorage.setItem('sbf-theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light');
 
   const [documents, setDocuments] = useState<BTPDocument[]>([]);
   const [isInitialized, setIsInitialized] = useState(false);
 
-  // 1. Initial Load: Try Sheet first, merge with LocalStorage to keep files
   useEffect(() => {
-      const initData = async () => {
-          setLoading(true);
-          
-          try {
-              // Fetch Cloud Data (Metadata mostly)
-              const sheetDocs = await fetchDocumentsFromSheet();
-              
-              // Fetch Local Data (Contains Files)
-              const localSaved = localStorage.getItem('btp-docs');
-              const localDocs: BTPDocument[] = localSaved ? JSON.parse(localSaved) : [];
+      // If we aren't logged in, don't try to fetch
+      if (!user) {
+          return;
+      }
+      
+      setLoading(true);
+      let isInitialLoad = true;
 
-              if (sheetDocs && sheetDocs.length > 0) {
-                  // Merge Strategy:
-                  // Use Sheet docs as the master list (for rows/status), 
-                  // but inject files from LocalStorage if IDs match.
-                  const mergedDocs = sheetDocs.map(sDoc => {
-                      const lDoc = localDocs.find(l => l.id === sDoc.id);
-                      if (lDoc) {
-                          // Restore files from local version to cloud version
-                          const mergedRevisions = sDoc.revisions.map(sRev => {
-                              const lRev = lDoc.revisions.find(r => r.id === sRev.id);
-                              if (lRev) {
-                                  return {
-                                      ...sRev,
-                                      transmittalFiles: (sRev.transmittalFiles && sRev.transmittalFiles.length > 0) ? sRev.transmittalFiles : lRev.transmittalFiles,
-                                      observationFiles: (sRev.observationFiles && sRev.observationFiles.length > 0) ? sRev.observationFiles : lRev.observationFiles
-                                  };
-                              }
-                              return sRev;
-                          });
-                          return { ...sDoc, revisions: mergedRevisions };
-                      }
-                      return sDoc;
-                  });
-                  setDocuments(mergedDocs);
-              } else if (localDocs.length > 0) {
-                  setDocuments(localDocs);
-              } else {
+      const unsubscribe = firestoreService.subscribeToDocuments((fetchedDocs) => {
+          if (isInitialLoad) {
+              if (fetchedDocs.length === 0) {
+                  // Fallback for visual testing
                   setDocuments(INITIAL_DOCS);
+              } else {
+                  setDocuments(fetchedDocs);
               }
-          } catch (e) {
-              console.error("Init Error", e);
-              // Fallback
-              const localSaved = localStorage.getItem('btp-docs');
-              setDocuments(localSaved ? JSON.parse(localSaved) : INITIAL_DOCS);
-          } finally {
               setLoading(false);
               setIsInitialized(true);
+              isInitialLoad = false;
+          } else {
+              setDocuments(fetchedDocs);
           }
-      };
+      }, (error) => {
+          console.error("Firestore Init Error (Peut-être lié aux règles de sécurité Firestore):", error);
+          // Fallback to local
+          const localSaved = localStorage.getItem('btp-docs');
+          setDocuments(localSaved ? JSON.parse(localSaved) : INITIAL_DOCS);
+          setLoading(false);
+          setIsInitialized(true);
+      });
 
-      initData();
-  }, []);
+      return () => unsubscribe();
+  }, [user]);
 
-  // 2. Sync Effect: Update LocalStorage AND Google Sheet on changes
+  // Keep a small local backup just in case
   useEffect(() => {
-    if (!isInitialized) return;
-
-    // Save Local (Full data with files)
-    localStorage.setItem('btp-docs', JSON.stringify(documents));
-
-    // Save Remote (Debounced, metadata only stripped in service)
-    const syncToSheet = async () => {
-        setSyncing(true);
-        await saveDocumentsToSheet(documents);
-        setSyncing(false);
-    };
-
-    const timeoutId = setTimeout(() => {
-        syncToSheet();
-    }, 2000);
-
-    return () => clearTimeout(timeoutId);
-
+      if (isInitialized && documents.length > 0) {
+          localStorage.setItem('btp-docs', JSON.stringify(documents));
+      }
   }, [documents, isInitialized]);
 
-
-  const addDocument = (doc: BTPDocument) => {
+  const addDocument = async (doc: BTPDocument) => {
+    // Optimistic UI update
     setDocuments(prev => [...prev, doc]);
+    setSyncing(true);
+    try {
+        await firestoreService.addDocument(doc);
+        toast.success("Document ajouté avec succès !");
+    } catch(err) {
+        toast.error("Erreur de sauvegarde Firestore. Veuillez vérifier les permissions.");
+        // Revert 
+        setDocuments(prev => prev.filter(d => d.id !== doc.id));
+    } finally {
+        setSyncing(false);
+    }
   };
 
-  const updateDocument = (updatedDoc: BTPDocument) => {
+  const updateDocument = async (updatedDoc: BTPDocument) => {
+    const backup = documents;
     setDocuments(prev => prev.map(d => d.id === updatedDoc.id ? updatedDoc : d));
+    setSyncing(true);
+    try {
+        await firestoreService.updateDocument(updatedDoc);
+        toast.success("Document mis à jour !");
+    } catch(err) {
+        toast.error("Erreur de modification Firestore.");
+        setDocuments(backup);
+    } finally {
+        setSyncing(false);
+    }
   };
 
-  const deleteDocument = (id: string) => {
+  const deleteDocument = async (id: string) => {
+    const backup = documents;
     setDocuments(prev => prev.filter(d => d.id !== id));
     setBordereauSelectedDocs(prev => prev.filter(docId => docId !== id));
+    setSyncing(true);
+    try {
+        await firestoreService.deleteDocument(id);
+        toast.success("Document supprimé définitivement.");
+    } catch(err) {
+        toast.error("Erreur de suppression Firestore.");
+        setDocuments(backup);
+    } finally {
+        setSyncing(false);
+    }
   };
 
   const handleNavigateToDocs = (filter: ApprovalStatus | 'ALL') => {
@@ -185,6 +200,10 @@ export default function App() {
   };
 
   const handleAddToBordereau = (docId: string) => {
+      if (user?.role === 'viewer') {
+          toast.error("Action non autorisée pour votre profil.");
+          return;
+      }
       if (!bordereauSelectedDocs.includes(docId)) {
           setBordereauSelectedDocs(prev => [...prev, docId]);
       }
@@ -192,6 +211,16 @@ export default function App() {
   };
 
   const renderContent = () => {
+    // Role-based security redirection
+    if (user?.role === 'viewer' && ['bordereaux', 'settings'].includes(activeTab)) {
+        setActiveTab('overview');
+        return <Dashboard documents={documents} onNavigateToDocs={handleNavigateToDocs} />;
+    }
+    if (user?.role === 'editor' && activeTab === 'settings') {
+        setActiveTab('overview');
+        return <Dashboard documents={documents} onNavigateToDocs={handleNavigateToDocs} />;
+    }
+
     switch (activeTab) {
       case 'overview':
         return <Dashboard documents={documents} onNavigateToDocs={handleNavigateToDocs} />;
@@ -201,7 +230,10 @@ export default function App() {
             onAddDocument={addDocument} 
             onUpdateDocument={updateDocument} 
             onDeleteDocument={deleteDocument}
-            onNavigateToBordereau={() => setActiveTab('bordereaux')}
+            onNavigateToBordereau={() => {
+                if (user?.role === 'viewer') toast.error("Action non autorisée.");
+                else setActiveTab('bordereaux');
+            }}
             onAddToBordereau={handleAddToBordereau}
             initialFilter={initialDocFilter}
         />;
@@ -221,21 +253,40 @@ export default function App() {
     }
   };
 
-  if (loading) {
+  if (loading || authLoading) {
       return (
-          <div className="h-screen w-screen flex flex-col items-center justify-center bg-gray-50 text-gray-500 gap-4">
+          <div className="h-screen w-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-slate-900 text-gray-500 dark:text-slate-400 gap-4 transition-colors">
               <Loader2 className="animate-spin text-blue-600" size={48} />
               <p>Chargement et Synchronisation SBF...</p>
           </div>
       );
   }
 
+  if (!user) {
+    return <Login />;
+  }
+
   return (
-    <Layout activeTab={activeTab} setActiveTab={setActiveTab}>
+    <Layout activeTab={activeTab} setActiveTab={setActiveTab} theme={theme} onToggleTheme={toggleTheme}>
+      <Toaster 
+          position="bottom-right" 
+          toastOptions={{
+              duration: 4000,
+              style: {
+                  background: theme === 'dark' ? '#1e293b' : '#333',
+                  color: '#fff',
+                  fontSize: '14px',
+                  borderRadius: '10px',
+                  border: theme === 'dark' ? '1px solid #334155' : 'none',
+              },
+              success: { style: { background: '#16a34a' } },
+              error: { style: { background: '#dc2626' } },
+          }} 
+      />
       {syncing && (
-          <div className="fixed bottom-4 right-4 bg-white/90 shadow-lg border border-blue-100 rounded-full px-4 py-2 flex items-center gap-2 text-xs font-medium text-blue-600 z-50 animate-pulse">
+          <div className="fixed bottom-4 right-4 bg-white/90 dark:bg-slate-800/90 shadow-lg border border-blue-100 dark:border-blue-900 rounded-full px-4 py-2 flex items-center gap-2 text-xs font-medium text-blue-600 dark:text-blue-400 z-50 animate-pulse transition-colors">
               <Loader2 className="animate-spin" size={12} />
-              Sauvegarde Cloud...
+              Sauvegarde ...
           </div>
       )}
       {renderContent()}

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { BTPDocument, ApprovalStatus } from '../types';
+import { BTPDocument, ApprovalStatus, SendRecord } from '../types';
 import { Square, CheckSquare, Archive, History, Trash2, Eye, X, AlertTriangle, CheckCircle, FileText, Printer, User, Users, Calendar, Hash, FileInput, PenTool, FileType, ChevronRight, Briefcase, Settings2, DownloadCloud, Search, Filter, ListPlus, MinusCircle, PlusCircle, Mic, MicOff, Plus } from 'lucide-react';
 import { Logo } from './Logo';
 import { Document, Packer, Paragraph, Table, TableRow, TableCell, WidthType, TextRun, ImageRun, BorderStyle, AlignmentType, VerticalAlign, Header } from 'docx';
+import { useAuth } from '../context/AuthContext';
 
 interface BordereauViewProps {
   documents: BTPDocument[];
@@ -53,10 +54,18 @@ const INTERNAL_DEPARTMENTS = [
 export const BordereauView: React.FC<BordereauViewProps> = ({ 
     documents, 
     onAddDocument, 
+    onUpdateDocument,
     onDeleteDocument,
     selectedDocs,
     setSelectedDocs
 }) => {
+  const { user } = useAuth();
+  const isViewer = user?.role === 'viewer';
+  const isEditor = user?.role === 'editor';
+  const isAdmin = user?.role === 'admin';
+  const canModify = isAdmin || isEditor;
+  const canDelete = isAdmin;
+
   const [isExporting, setIsExporting] = useState(false);
   const [logo, setLogo] = useState('');
 
@@ -397,7 +406,49 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
       setHistory(updatedHistory);
       localStorage.setItem('btp-bordereau-history', JSON.stringify(updatedHistory));
 
-      // 2. Export PDF
+      // 2. ✅ Synchronisation automatique des documents (sendHistory)
+      // Ajoute un nouveau SendRecord à la révision courante de chaque document
+      currentSelection.forEach(doc => {
+          const revIdx = (doc.currentRevisionIndex !== undefined) ? doc.currentRevisionIndex : doc.revisions.length - 1;
+          const updatedRevisions = doc.revisions.map((rev, idx) => {
+              if (idx === revIdx) {
+                  const newRecipient = formData.to?.trim() || 'Non spécifié';
+                  
+                  // Créer un nouveau SendRecord pour cet envoi
+                  const newSendRecord: SendRecord = {
+                      id: crypto.randomUUID(),
+                      recipientName: newRecipient,
+                      transmittalRef: formData.refBE,
+                      transmittalDate: formData.date,
+                      status: ApprovalStatus.PENDING, // Nouveau envoi = En attente
+                  };
+
+                  // Ajouter à l'historique existant
+                  const existingSendHistory = rev.sendHistory || [];
+                  const updatedSendHistory = [...existingSendHistory, newSendRecord];
+
+                  // Accumuler les destinataires (legacy compat)
+                  const existingRecipients: string[] = rev.recipients ? [...rev.recipients] : rev.recipient ? [rev.recipient] : [];
+                  if (!existingRecipients.includes(newRecipient)) {
+                      existingRecipients.push(newRecipient);
+                  }
+
+                  return {
+                      ...rev,
+                      sendHistory: updatedSendHistory,
+                      recipients: existingRecipients,
+                      recipient: existingRecipients.join(', '),
+                      transmittalDate: formData.date || rev.transmittalDate,
+                      transmittalRef: formData.refBE || rev.transmittalRef,
+                  };
+              }
+              return rev;
+          });
+          const updatedDoc = { ...doc, revisions: updatedRevisions };
+          onUpdateDocument(updatedDoc);
+      });
+
+      // 3. Export PDF
       try {
          await handleExportPDF('print-area', formData.refBE);
          alert("Bordereau enregistré et téléchargement du PDF lancé !");
@@ -406,7 +457,7 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
          alert("Erreur génération PDF");
       }
 
-      // 3. Clear selection automatically
+      // 4. Clear selection automatically
       setSelectedDocs([]);
       setDocObs({});
       setDocCopies({});
@@ -980,13 +1031,13 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full space-y-6 bg-slate-900 p-6 min-h-screen">
+    <div className="flex flex-col h-full space-y-6 bg-gray-50 dark:bg-slate-950 p-6 min-h-screen transition-colors">
       
       {/* --- HEADER ACTIONS --- */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 no-print border-b border-slate-700 pb-6">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 no-print border-b border-gray-200 dark:border-slate-800 pb-6 transition-colors">
          <div>
-            <h2 className="text-2xl font-bold text-white">Générateur de Bordereau</h2>
-            <p className="text-slate-400 text-sm">Configurez l'envoi, sélectionnez les documents et générez vos bordereaux.</p>
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white transition-colors">Générateur de Bordereau</h2>
+            <p className="text-gray-500 dark:text-slate-400 text-[13px]">Configurez l'envoi, sélectionnez les documents et générez vos bordereaux.</p>
          </div>
          <div className="flex gap-3">
              <button onClick={() => setIsHistoryOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-slate-800 border border-slate-600 rounded-lg hover:bg-slate-700 text-slate-200 font-medium transition-colors shadow-sm active:scale-95">
@@ -995,28 +1046,30 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
              <button onClick={handleExportWord} className="flex items-center gap-2 px-4 py-2 bg-blue-700 text-white rounded-lg hover:bg-blue-600 font-medium transition-colors shadow-sm active:scale-95 border border-blue-600">
                 <FileText size={16} /> Word
              </button>
-             <button 
-                onClick={handleArchiveBordereau} 
-                className="flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-500 font-medium transition-colors shadow-sm active:scale-95 border border-amber-500"
-            >
-                <DownloadCloud size={16} />
-                Enregistrer & PDF
-             </button>
+             {canModify && (
+                 <button 
+                    onClick={handleArchiveBordereau} 
+                    className="flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-[13px] font-bold transition-all shadow-md active:scale-95 border border-amber-500"
+                >
+                    <DownloadCloud size={16} />
+                    Enregistrer & PDF
+                 </button>
+             )}
          </div>
       </div>
 
       {/* --- SECTION 1: CONFIGURATION (Top Row) --- */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 no-print">
           {/* INTERVENANTS */}
-          <div className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
-               <h3 className="text-sm font-bold text-amber-500 mb-5 flex items-center gap-2 uppercase tracking-wide border-b border-slate-700 pb-3">
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-xl shadow-lg border border-gray-200 dark:border-slate-800 transition-colors">
+               <h3 className="text-[11px] font-bold text-amber-600 dark:text-amber-500 mb-5 flex items-center gap-2 uppercase tracking-wide border-b border-gray-100 dark:border-slate-800 pb-3">
                    <Users size={18} className="text-amber-500" /> Intervenants
                </h3>
                <div className="grid grid-cols-2 gap-5">
                    <div>
-                       <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">De la part de</label>
+                       <label className="block text-[11px] font-semibold text-gray-500 dark:text-slate-400 mb-2 uppercase tracking-wide">De la part de</label>
                        <select 
-                           className="w-full p-2.5 border border-slate-600 rounded-lg text-sm bg-slate-900 text-white focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none transition-all appearance-none"
+                           className="w-full p-2.5 border border-gray-200 dark:border-slate-700 rounded-lg text-[13px] bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 outline-none transition-all appearance-none"
                            value={formData.from}
                            onChange={e => setFormData({...formData, from: e.target.value})}
                        >
@@ -1025,9 +1078,9 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
                        </select>
                    </div>
                    <div>
-                       <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">Destinataire</label>
+                       <label className="block text-[11px] font-semibold text-gray-500 dark:text-slate-400 mb-2 uppercase tracking-wide">Destinataire</label>
                        <select 
-                           className="w-full p-2.5 border border-slate-600 rounded-lg text-sm bg-slate-900 text-white focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none font-medium transition-all appearance-none"
+                           className="w-full p-2.5 border border-gray-200 dark:border-slate-700 rounded-lg text-[13px] bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 outline-none font-bold transition-all appearance-none"
                            value={formData.to}
                            onChange={e => {
                                const newTo = e.target.value;
@@ -1067,33 +1120,33 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
           </div>
 
           {/* META DATA */}
-          <div className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
-               <h3 className="text-sm font-bold text-amber-500 mb-5 flex items-center gap-2 uppercase tracking-wide border-b border-slate-700 pb-3">
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-xl shadow-lg border border-gray-200 dark:border-slate-800 transition-colors">
+               <h3 className="text-[11px] font-bold text-amber-600 dark:text-amber-500 mb-5 flex items-center gap-2 uppercase tracking-wide border-b border-gray-100 dark:border-slate-800 pb-3">
                    <Settings2 size={18} className="text-amber-500" /> Détails Envoi
                </h3>
                <div className="grid grid-cols-2 gap-5 mb-4">
                     <div>
-                        <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">Date d'Envoi</label>
+                        <label className="block text-[11px] font-semibold text-gray-500 dark:text-slate-400 mb-2 uppercase tracking-wide">Date d'Envoi</label>
                         <input 
                             type="date"
-                            className="w-full p-2.5 border border-slate-600 rounded-lg text-sm bg-slate-900 text-white focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none transition-all"
+                            className="w-full p-2.5 border border-gray-200 dark:border-slate-700 rounded-lg text-[13px] bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 outline-none transition-all"
                             value={formData.date}
                             onChange={e => setFormData({...formData, date: e.target.value})}
                         />
                     </div>
                     <div>
-                       <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">Réf. Transmise (BE)</label>
+                       <label className="block text-[11px] font-semibold text-gray-500 dark:text-slate-400 mb-2 uppercase tracking-wide">Réf. Transmise (BE)</label>
                        <input 
-                           className="w-full p-2.5 border border-slate-600 rounded-lg text-sm bg-slate-900 text-white focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none transition-all font-mono"
+                           className="w-full p-2.5 border border-gray-200 dark:border-slate-700 rounded-lg text-[13px] bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 outline-none transition-all font-mono font-bold"
                            value={formData.refBE}
                            onChange={e => setFormData({...formData, refBE: e.target.value})}
                        />
                    </div>
                </div>
                <div>
-                   <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">Objet</label>
+                   <label className="block text-[11px] font-semibold text-gray-500 dark:text-slate-400 mb-2 uppercase tracking-wide">Objet</label>
                    <textarea 
-                       className="w-full p-3 border border-slate-600 rounded-lg text-sm bg-slate-900 text-white focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none resize-none h-20 transition-all"
+                       className="w-full p-3 border border-gray-200 dark:border-slate-700 rounded-lg text-[13px] bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 outline-none resize-none h-20 transition-all font-medium"
                        value={formData.object}
                        onChange={e => setFormData({...formData, object: e.target.value})}
                    />
@@ -1101,22 +1154,24 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
           </div>
       </div>
 
-      {/* --- SECTION 2: DOCUMENT SELECTION TABLE (Zone de choix des documents) --- */}
-      <div className="bg-slate-800 rounded-xl shadow-lg border border-slate-700 flex flex-col no-print">
+      {/* --- SECTION 2: DOCUMENT SELECTION TABLE --- */}
+      <div className="bg-white dark:bg-slate-900 rounded-xl shadow-lg border border-gray-200 dark:border-slate-800 flex flex-col no-print transition-colors">
            {/* HEADER WITH FILTERS */}
-           <div className="p-4 border-b border-slate-700 bg-slate-800 space-y-4">
+           <div className="p-4 border-b border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-4 transition-colors">
                 <div className="flex justify-between items-center">
-                    <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2 uppercase tracking-wide">
-                        <CheckSquare size={18} className="text-emerald-400" /> LISTE DES DOCUMENTS À INCLURE
+                    <h3 className="text-[11px] font-bold text-gray-700 dark:text-slate-200 flex items-center gap-2 uppercase tracking-wide transition-colors">
+                        <CheckSquare size={18} className="text-emerald-500" /> LISTE DES DOCUMENTS
                     </h3>
                     <div className="flex items-center gap-2">
-                        <button 
-                            onClick={() => setIsAddModalOpen(true)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-bold hover:bg-amber-700 transition-colors shadow-sm"
-                        >
-                            <Plus size={14} /> Nouveau Document
-                        </button>
-                        <span className="text-xs font-bold bg-emerald-900/50 text-emerald-400 border border-emerald-800 px-3 py-1.5 rounded-full">
+                        {canModify && (
+                            <button 
+                                onClick={() => setIsAddModalOpen(true)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-[11px] font-bold hover:bg-amber-700 transition-colors shadow-sm"
+                            >
+                                <Plus size={14} /> Nouveau
+                            </button>
+                        )}
+                        <span className="text-[10px] font-bold bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 px-3 py-1.5 rounded-full transition-colors">
                             {selectedDocs.length} sélectionné(s)
                         </span>
                     </div>
@@ -1129,11 +1184,11 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
                         <input 
                             type="text" 
                             placeholder="Rechercher par Code, Nom..." 
-                            className="w-full pl-9 pr-10 py-2 text-xs border border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-amber-500 bg-slate-900 text-white"
+                            className="w-full pl-9 pr-10 py-2 text-[11px] border border-gray-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-amber-500 bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white transition-colors"
                             value={searchTerm}
                             onChange={e => setSearchTerm(e.target.value)}
                         />
-                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-slate-500" />
                         <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
                              {searchTerm && (
                                 <button onClick={() => setSearchTerm('')} className="p-1 hover:bg-slate-700 rounded-full text-slate-400">
@@ -1153,7 +1208,7 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
                     {/* FILTER STATUS */}
                     <div className="relative w-full md:w-48">
                         <select 
-                            className="w-full pl-9 pr-3 py-2 text-xs border border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-amber-500 bg-slate-900 text-white appearance-none cursor-pointer"
+                            className="w-full pl-9 pr-3 py-2 text-[11px] border border-gray-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-amber-500 bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white appearance-none cursor-pointer transition-colors"
                             value={statusFilter}
                             onChange={e => setStatusFilter(e.target.value as any)}
                         >
@@ -1161,30 +1216,31 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
                             <option value={ApprovalStatus.PENDING}>En cours de révision</option>
                             <option value={ApprovalStatus.NO_RESPONSE}>Sans Réponse</option>
                             <option value={ApprovalStatus.APPROVED}>Approuvé</option>
+                            <option value={ApprovalStatus.APPROVED_WITH_COMMENTS}>Approuvé avec réserves</option>
                             <option value={ApprovalStatus.REJECTED}>Non Approuvé</option>
                         </select>
-                        <Filter size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <Filter size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-slate-500" />
                     </div>
 
                     {/* QUICK ACTIONS */}
                     <div className="flex gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0">
                         <button 
                             onClick={selectAllFiltered}
-                            className="flex items-center gap-1.5 px-3 py-2 bg-slate-700 text-blue-300 hover:bg-slate-600 border border-slate-600 rounded-lg text-xs font-medium whitespace-nowrap transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-2 bg-gray-100 dark:bg-slate-800 text-blue-600 dark:text-blue-400 hover:bg-gray-200 dark:hover:bg-slate-700 border border-gray-200 dark:border-slate-700 rounded-lg text-[11px] font-bold whitespace-nowrap transition-colors"
                             title="Tout cocher dans la liste visible"
                         >
                             <PlusCircle size={14} /> Tout cocher
                         </button>
                         <button 
                             onClick={() => selectByStatus(ApprovalStatus.PENDING)}
-                            className="flex items-center gap-1.5 px-3 py-2 bg-slate-700 text-amber-300 hover:bg-slate-600 border border-slate-600 rounded-lg text-xs font-medium whitespace-nowrap transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-2 bg-gray-100 dark:bg-slate-800 text-amber-600 dark:text-amber-500 hover:bg-gray-200 dark:hover:bg-slate-700 border border-gray-200 dark:border-slate-700 rounded-lg text-[11px] font-bold whitespace-nowrap transition-colors"
                             title="Cocher tous les documents En Cours"
                         >
                             <ListPlus size={14} /> + En Cours
                         </button>
                         <button 
                             onClick={deselectAll}
-                            className="flex items-center gap-1.5 px-3 py-2 bg-slate-700 text-slate-300 hover:bg-slate-600 border border-slate-600 rounded-lg text-xs font-medium whitespace-nowrap transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-2 bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-400 hover:bg-gray-200 dark:hover:bg-slate-700 border border-gray-200 dark:border-slate-700 rounded-lg text-[11px] font-bold whitespace-nowrap transition-colors"
                             title="Tout décocher"
                         >
                             <MinusCircle size={14} /> Décocher
@@ -1195,7 +1251,7 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
            
            <div className="overflow-x-auto max-h-96 overflow-y-auto">
                <table className="w-full text-left text-sm">
-                   <thead className="bg-slate-950 text-amber-500 font-bold text-xs uppercase sticky top-0 z-10 shadow-sm border-b border-amber-500/50">
+                   <thead className="bg-slate-950 text-amber-500 font-bold text-[9px] uppercase sticky top-0 z-10 shadow-sm border-b border-amber-500/50">
                        <tr>
                            <th className="p-4 w-12 text-center border-b border-slate-700 bg-slate-950">
                                <Square size={16} className="text-amber-500 mx-auto" />
@@ -1256,7 +1312,7 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
                                            className={`w-full text-center border rounded-md p-1.5 text-xs outline-none focus:ring-2 focus:ring-amber-500 transition-all ${!isSelected ? 'bg-slate-800 text-slate-600 border-transparent' : 'bg-slate-900 border-slate-500 font-bold text-white shadow-sm'}`}
                                            value={docCopies[doc.id] || 1}
                                            onChange={(e) => updateDocCopies(doc.id, e.target.value)}
-                                           disabled={!isSelected}
+                                           disabled={!isSelected || isViewer}
                                            onClick={(e) => e.stopPropagation()}
                                        />
                                    </td>
@@ -1268,20 +1324,22 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
                                                value={docObs[doc.id] || ''}
                                                onChange={(e) => updateDocObs(doc.id, e.target.value)}
                                                placeholder={isSelected ? "R.A.S..." : ""}
-                                               disabled={!isSelected}
+                                               disabled={!isSelected || isViewer}
                                                onClick={(e) => e.stopPropagation()}
                                            />
                                            <PenTool size={12} className={`absolute left-2.5 top-1/2 -translate-y-1/2 ${isSelected ? 'text-amber-400' : 'text-slate-600'}`} />
                                        </div>
                                    </td>
                                    <td className="p-2 text-center" onClick={(e) => e.stopPropagation()}>
-                                       <button 
-                                            onClick={() => setDeleteDocConfirmId(doc.id)}
-                                            className="p-2 text-slate-600 hover:text-red-400 hover:bg-red-900/30 rounded-full transition-colors"
-                                            title="Supprimer ce document de la liste"
-                                       >
-                                           <Trash2 size={16} />
-                                       </button>
+                                       {canDelete && (
+                                           <button 
+                                                onClick={() => setDeleteDocConfirmId(doc.id)}
+                                                className="p-2 text-slate-600 hover:text-red-400 hover:bg-red-900/30 rounded-full transition-colors"
+                                                title="Supprimer ce document de la liste"
+                                           >
+                                               <Trash2 size={16} />
+                                           </button>
+                                       )}
                                    </td>
                                </tr>
                            );
@@ -1441,14 +1499,14 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
                           </div>
                       ) : (
                           <table className="w-full text-left text-sm text-slate-300">
-                              <thead className="bg-slate-950 text-amber-500 font-bold text-xs uppercase sticky top-0 z-10 shadow-sm border-b border-amber-500/30">
+                              <thead className="bg-slate-950 text-amber-500 font-bold text-[9px] uppercase sticky top-0 z-10 shadow-sm border-b border-amber-500/30">
                                   <tr>
-                                      <th className="p-4 border-b border-slate-800">Date</th>
-                                      <th className="p-4 border-b border-slate-800">Réf B.E.</th>
-                                      <th className="p-4 border-b border-slate-800">Destinataire</th>
-                                      <th className="p-4 border-b border-slate-800 w-1/4">Code Complet</th>
-                                      <th className="p-4 border-b border-slate-800 w-1/4">Désignation</th>
-                                      <th className="p-4 border-b border-slate-800 text-right">Actions</th>
+                                      <th className="p-2 border-b border-slate-800 text-[9px]">Date</th>
+                                      <th className="p-2 border-b border-slate-800 text-[9px]">Réf B.E.</th>
+                                      <th className="p-2 border-b border-slate-800 text-[9px]">Destinataire</th>
+                                      <th className="p-2 border-b border-slate-800 w-1/4 text-[9px]">Code Complet</th>
+                                      <th className="p-2 border-b border-slate-800 w-1/4 text-[9px]">Désignation</th>
+                                      <th className="p-2 border-b border-slate-800 text-right text-[9px]">Actions</th>
                                   </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-700/50">
@@ -1463,7 +1521,7 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
                                           <td className="p-4 whitespace-nowrap">
                                               <span className="bg-slate-700 text-slate-200 px-2 py-1 rounded text-xs font-bold border border-slate-600">{item.recipient}</span>
                                           </td>
-                                          <td className="p-4">
+                                          <td className="p-2">
                                               <ul className="space-y-1">
                                                   {item.documents.map((doc, idx) => (
                                                       <li key={idx} className="font-mono text-xs text-slate-400 bg-slate-900/50 px-2 py-0.5 rounded border border-slate-700 w-fit">
@@ -1490,13 +1548,15 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
                                                   >
                                                       <FileText size={18} />
                                                   </button>
-                                                  <button 
-                                                      onClick={() => setDeleteConfirmId(item.id)}
-                                                      className="text-red-400 hover:text-red-300 p-2 hover:bg-red-900/20 rounded transition-colors"
-                                                      title="Supprimer"
-                                                  >
-                                                      <Trash2 size={18} />
-                                                  </button>
+                                                  {canDelete && (
+                                                      <button 
+                                                          onClick={() => setDeleteConfirmId(item.id)}
+                                                          className="text-red-400 hover:text-red-300 p-2 hover:bg-red-900/20 rounded transition-colors"
+                                                          title="Supprimer"
+                                                      >
+                                                          <Trash2 size={18} />
+                                                      </button>
+                                                  )}
                                               </div>
                                           </td>
                                       </tr>
