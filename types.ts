@@ -55,6 +55,7 @@ export interface BTPDocument {
   poste: string; // e.g., "GC"
   code: string; // e.g., "GC-FND-Z1-001"
   name: string;
+  titre?: string; // e.g., "Plans de Fondations"
   revisions: Revision[];
   currentRevisionIndex: number;
 }

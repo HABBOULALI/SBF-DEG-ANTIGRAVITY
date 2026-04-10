@@ -23,6 +23,7 @@ interface AppSettings {
     defaultValidator: string;
     logo: string;
     logoMDO?: string;
+    titles?: string[]; // Classification titles
     stakeholders: {
         client: Stakeholder;
         consultant: Stakeholder;
@@ -52,6 +53,7 @@ export const SettingsView: React.FC = () => {
     defaultValidator: 'Bureau de Contrôle',
     logo: '',
     logoMDO: '',
+    titles: ['PLANS DE FONDATION', 'PLANS DE COFFRAGE', 'PLANS DE FERRAILLAGE', 'NOTES DE CALCUL'],
     stakeholders: {
         client: { name: 'Maître d\'Ouvrage', contacts: ['M. Le Directeur Technique'] },
         consultant: { name: 'Bureau d\'Études Structure', contacts: ['M. L\'Ingénieur Conseil'] },
@@ -311,6 +313,67 @@ export const SettingsView: React.FC = () => {
                     <input name="projectName" value={settings.projectName} onChange={handleChange} className="w-full p-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-[13px] transition-colors" placeholder="Projet" />
                     <input name="projectCode" value={settings.projectCode} onChange={handleChange} className="w-full p-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-[13px] transition-colors" placeholder="Code Projet" />
                 </div>
+            </div>
+        </div>
+
+        {/* Section Titres de Classification */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-4">
+            <h3 className="text-base font-bold flex items-center gap-2 text-slate-800 dark:text-white">
+                <FileText size={20} className="text-blue-600" />
+                Titres de Classification des Documents
+            </h3>
+            <p className="text-xs text-slate-500">Ces titres seront utilisés pour classer les documents dans le tableau de suivi.</p>
+            
+            <div className="flex gap-2">
+                <input 
+                    type="text"
+                    id="new-title-input"
+                    placeholder="Nouveau titre (ex: PLANS DE FERRAILLAGE)"
+                    className="flex-1 p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none text-sm dark:bg-slate-800 dark:border-slate-700 dark:text-white"
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                            const val = e.currentTarget.value.trim();
+                            if (val) {
+                                setSettings({ ...settings, titles: [...(settings.titles || []), val] });
+                                e.currentTarget.value = '';
+                            }
+                        }
+                    }}
+                />
+                <button 
+                    onClick={() => {
+                        const input = document.getElementById('new-title-input') as HTMLInputElement;
+                        const val = input.value.trim();
+                        if (val) {
+                            setSettings({ ...settings, titles: [...(settings.titles || []), val] });
+                            input.value = '';
+                        }
+                    }}
+                    className="bg-blue-600 text-white px-4 py-2 rounded font-bold text-sm hover:bg-blue-700"
+                >
+                    <Plus size={18} />
+                </button>
+            </div>
+
+            <div className="flex flex-wrap gap-2 pt-2">
+                {(settings.titles || []).map((title, idx) => (
+                    <div key={idx} className="flex items-center gap-2 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-full border border-slate-200 dark:border-slate-700 group transition-all">
+                        <span className="text-[12px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-tight">{title}</span>
+                        <button 
+                            onClick={() => {
+                                const newTitles = [...(settings.titles || [])];
+                                newTitles.splice(idx, 1);
+                                setSettings({ ...settings, titles: newTitles });
+                            }}
+                            className="text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                            <X size={14} />
+                        </button>
+                    </div>
+                ))}
+                {(settings.titles || []).length === 0 && (
+                    <p className="text-xs italic text-slate-400">Aucun titre configuré.</p>
+                )}
             </div>
         </div>
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Plus, Filter, Download, Clock, Edit2, Save, X, Loader2, FileSpreadsheet, ChevronUp, ChevronDown, ArrowUpDown, Bell, BellRing, Calendar, Send, Trash2, AlertTriangle, UploadCloud, FileText, Search, Mic, MicOff, ListPlus, Paperclip, File as FileIcon } from 'lucide-react';
+import { Plus, Filter, Download, Clock, Edit2, Save, X, Loader2, FileSpreadsheet, ChevronUp, ChevronDown, ArrowUpDown, Bell, BellRing, Calendar, Send, Trash2, AlertTriangle, UploadCloud, FileText, Search, Mic, MicOff, ListPlus, Paperclip, File as FileIcon, CheckCircle2 } from 'lucide-react';
 import { BTPDocument, ApprovalStatus, Revision, SendRecord } from '../types';
 import { Logo } from './Logo';
 import { useAuth } from '../context/AuthContext';
@@ -93,7 +93,8 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
     projectCode: 'PRJ-2024-HZ',
     projectName: 'Construction Siège Horizon',
     logo: '',
-    logoMDO: ''
+    logoMDO: '',
+    titles: []
   });
 
   const loadSettings = () => {
@@ -139,6 +140,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
   const [newStatus, setNewStatus] = useState<ApprovalStatus>(ApprovalStatus.NO_RESPONSE);
   const [newApprovedSendDate, setNewApprovedSendDate] = useState('');
   const [newApprovedReturnDate, setNewApprovedReturnDate] = useState('');
+  const [newTitre, setNewTitre] = useState('');
 
   // --- LOGIQUE RECHERCHE VOCALE ---
   const handleVoiceSearch = () => {
@@ -215,9 +217,14 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
   const sortedRows = useMemo(() => {
     let sortableItems = [...filteredRows];
     
-    // Default Sort: Code ASC, then Index ASC
+    // Default Sort: Titre ASC, then Code ASC, then Index ASC
     if (sortConfig === null) {
         sortableItems.sort((a, b) => {
+            const titreA = a.doc.titre || 'ZZZZZ';
+            const titreB = b.doc.titre || 'ZZZZZ';
+            if (titreA < titreB) return -1;
+            if (titreA > titreB) return 1;
+
             if (a.doc.code < b.doc.code) return -1;
             if (a.doc.code > b.doc.code) return 1;
             // Same code, sort by index
@@ -312,6 +319,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
     setNewObservationRef('');
     setNewObservationFiles([]);
     setNewStatus(ApprovalStatus.NO_RESPONSE);
+    setNewTitre('');
   };
 
   const handleCreateClick = () => {
@@ -328,6 +336,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
       setNewPoste(doc.poste);
       setNewCode(doc.code);
       setNewName(doc.name);
+      setNewTitre(doc.titre || '');
       setNewIndex(rev.index);
       setNewTransmittalDate(rev.transmittalDate);
       setNewTransmittalRef(rev.transmittalRef);
@@ -381,6 +390,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
         updatedDoc.poste = newPoste;
         updatedDoc.code = newCode;
         updatedDoc.name = newName;
+        updatedDoc.titre = newTitre;
         let updatedRevs = [...updatedDoc.revisions];
         const targetRevIdx = updatedRevs.findIndex(r => r.id === editingRevId);
         if (targetRevIdx === -1) return;
@@ -433,6 +443,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
             poste: newPoste,
             code: newCode,
             name: newName,
+            titre: newTitre,
             currentRevisionIndex: 0,
             revisions: [
                 {
@@ -939,6 +950,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
   };
 
   return (
+    <>
     <div className="flex flex-col h-full bg-gray-50/50">
       {/* --- HEADER --- */}
       <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center p-4 bg-white border-b border-gray-200 shadow-sm gap-4">
@@ -1100,17 +1112,35 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                       Aucun document trouvé.
                     </td>
                   </tr>
-                ) : sortedRows.map(({ doc, rev, isLatest }, idx) => {
-                  // @ts-ignore
-                  const tFiles = rev.transmittalFiles || (rev.transmittalFile ? [rev.transmittalFile] : []);
-                  // @ts-ignore
-                  const oFiles = rev.observationFiles || (rev.observationFile ? [rev.observationFile] : []);
+                ) : (
+                  sortedRows.reduce<{ rows: JSX.Element[], lastTitre: string }>((acc, row, idx) => {
+                    const { doc, rev, isLatest } = row;
+                    const currentTitre = doc.titre || 'SANS TITRE';
 
-                  return (
-                    <tr 
-                      key={`${doc.id}-${rev.id}`} 
-                      className={`hover:bg-blue-50/50 transition-colors group ${!isLatest ? 'bg-gray-50/50 text-gray-400 text-xs italic' : ''}`}
-                    >
+                    if (currentTitre !== acc.lastTitre) {
+                      acc.rows.push(
+                        <tr key={`group-${currentTitre}`} className="bg-slate-200 dark:bg-slate-800">
+                          <td colSpan={16} className="px-4 py-2 text-[11px] font-black text-slate-900 dark:text-slate-100 uppercase tracking-widest border-y border-slate-300 dark:border-slate-700">
+                            <div className="flex items-center gap-2">
+                              <FileText size={14} className="text-blue-600" />
+                              {currentTitre}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                      acc.lastTitre = currentTitre;
+                    }
+
+                    // @ts-ignore
+                    const tFiles = rev.transmittalFiles || (rev.transmittalFile ? [rev.transmittalFile] : []);
+                    // @ts-ignore
+                    const oFiles = rev.observationFiles || (rev.observationFile ? [rev.observationFile] : []);
+
+                    acc.rows.push(
+                      <tr 
+                        key={`${doc.id}-${rev.id}`} 
+                        className={`hover:bg-blue-50/50 transition-colors group ${!isLatest ? 'bg-gray-50/50 text-gray-400 text-xs italic' : ''}`}
+                      >
                       <td className="px-1.5 py-1 border border-gray-300 dark:border-slate-700 text-center font-medium text-gray-400 align-middle text-[10px]">{idx + 1}</td>
                       <td className="px-1.5 py-1 border border-gray-300 dark:border-slate-700 font-bold text-center align-middle dark:text-slate-300">{doc.lot}</td>
                       <td className="px-1.5 py-1 border border-gray-300 dark:border-slate-700 text-center align-middle dark:text-slate-400 uppercase italic text-[10px]">{doc.poste}</td>
@@ -1392,7 +1422,9 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                       )}
                     </tr>
                   );
-                })}
+                  return acc;
+                  }, { rows: [], lastTitre: '' }).rows
+                )}
               </tbody>
             </table>
           </div>
@@ -1417,10 +1449,26 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                   </div>
                   
                   <form onSubmit={handleFormSubmit} className="p-6 space-y-6">
+                      {/* Titre (Classification) */}
+                      <div className="bg-blue-50/30 p-5 rounded-xl border border-blue-100 dark:border-blue-900/20 shadow-sm space-y-4">
+                          <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">Titre / Classification</label>
+                          <select 
+                            value={newTitre} 
+                            onChange={e => setNewTitre(e.target.value)} 
+                            className="w-full p-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-bold text-blue-950 dark:text-blue-100 transition-colors"
+                          >
+                              <option value="">-- Sélectionner un titre --</option>
+                              {appSettings.titles?.map(t => (
+                                  <option key={t} value={t}>{t}</option>
+                              ))}
+                          </select>
+                          <p className="text-[10px] text-slate-400 italic">Configurez les titres disponibles dans le menu "Paramètres".</p>
+                      </div>
+
                       {/* Identité du Document */}
                       <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm space-y-4">
                           <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-2">Identification</h4>
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                               <div>
                                   <label className="block text-xs font-semibold text-gray-500 mb-1">Lot</label>
                                   <input required value={newLot} onChange={e => setNewLot(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white" placeholder="01" />
@@ -1442,6 +1490,10 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                                   <label className="block text-xs font-semibold text-gray-500 mb-1">CODE</label>
                                   <input required value={newCode} onChange={e => setNewCode(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none font-mono bg-white" placeholder="GC-PL-001" />
                               </div>
+                              <div>
+                                  <label className="block text-xs font-semibold text-gray-500 mb-1">Indice</label>
+                                  <input required value={newIndex} onChange={e => setNewIndex(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none font-bold text-center bg-white" placeholder="A" />
+                              </div>
                           </div>
                           <div>
                               <label className="block text-xs font-semibold text-gray-500 mb-1">Désignation Document</label>
@@ -1449,96 +1501,105 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                           </div>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          {/* Transmittal Info */}
-                          <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm space-y-4">
-                              <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-2">Envoi (Transmittal)</h4>
-                              <div className="grid grid-cols-2 gap-4">
-                                  <div>
-                                      <label className="block text-xs font-semibold text-gray-500 mb-1">Indice</label>
-                                      <input required value={newIndex} onChange={e => setNewIndex(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none font-bold text-center bg-white" />
-                                  </div>
-                                  <div>
-                                      <label className="block text-xs font-semibold text-gray-500 mb-1">Date</label>
-                                      <input type="date" required value={newTransmittalDate} onChange={e => setNewTransmittalDate(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white" />
-                                  </div>
-                              </div>
-                              <div>
-                                  <label className="block text-xs font-semibold text-gray-500 mb-1">Réf</label>
-                                  <input value={newTransmittalRef} onChange={e => setNewTransmittalRef(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white" placeholder="B-00X" />
-                              </div>
-                              {/* File List Transmittal */}
-                              <div>
-                                  <label className="block text-xs font-semibold text-gray-500 mb-1">Pièces Jointes (B.E)</label>
-                                  {newTransmittalFiles.map((file, idx) => (
-                                      <div key={idx} className="flex items-center gap-2 text-xs bg-white border p-1 rounded mb-1">
-                                          <span className="truncate flex-1">Fichier {idx + 1}</span>
-                                          <button type="button" onClick={() => setAttachmentToDelete({ type: 'transmittal', index: idx })} className="text-red-500"><X size={12}/></button>
-                                      </div>
-                                  ))}
-                                  {newTransmittalFiles.length < 3 && (
-                                    <div className="relative mt-2">
-                                        <input type="file" id="transmittal-upload" className="hidden" onChange={(e) => handleModalFileChange(e, 'transmittal')} />
-                                        <label htmlFor="transmittal-upload" className="flex items-center justify-center gap-2 w-full p-2 border-2 border-dashed border-gray-300 rounded text-gray-500 hover:border-blue-500 hover:text-blue-500 cursor-pointer text-xs bg-white">
-                                            <UploadCloud size={14} /> Ajouter Fichier
-                                        </label>
+                      {editingDocId && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in slide-in-from-top-2 duration-300">
+                            {/* Transmittal Info */}
+                            <div className="bg-white dark:bg-slate-800/50 p-5 rounded-xl border border-gray-100 dark:border-slate-800 shadow-sm space-y-4">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <Send size={16} className="text-blue-600" />
+                                    <h4 className="text-sm font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Dernier Envoi (B.E)</h4>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 mb-1">Date d'envoi</label>
+                                        <input type="date" value={newTransmittalDate} onChange={e => setNewTransmittalDate(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none dark:bg-slate-700 dark:border-slate-600 dark:text-white shadow-sm" />
                                     </div>
-                                  )}
-                              </div>
-                          </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 mb-1">Réf. Bordereau</label>
+                                        <input value={newTransmittalRef} onChange={e => setNewTransmittalRef(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none dark:bg-slate-700 dark:border-slate-600 dark:text-white shadow-sm" placeholder="B-..." />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 mb-1">Fichiers Bordereau</label>
+                                    <div className="space-y-1">
+                                        {newTransmittalFiles.map((file, idx) => (
+                                            <div key={idx} className="flex items-center gap-2 text-[11px] bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 p-1.5 rounded-lg group">
+                                                <FileText size={12} className="text-blue-500" />
+                                                <span className="truncate flex-1 font-medium">Fichier {idx + 1}</span>
+                                                <button type="button" onClick={() => setAttachmentToDelete({ type: 'transmittal', index: idx })} className="text-gray-400 hover:text-red-500 transition-colors"><X size={14}/></button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    {newTransmittalFiles.length < 3 && (
+                                        <div className="relative mt-2">
+                                            <input type="file" id="transmittal-upload-modal" className="hidden" onChange={(e) => handleModalFileChange(e, 'transmittal')} />
+                                            <label htmlFor="transmittal-upload-modal" className="flex items-center justify-center gap-2 w-full p-2 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-lg text-slate-400 hover:border-blue-500 hover:text-blue-500 cursor-pointer text-[11px] font-bold transition-all bg-slate-50/50">
+                                                <UploadCloud size={14} /> Ajouter B.E
+                                            </label>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
 
-                          {/* Observation / Response Info */}
-                          <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm space-y-4">
-                              <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-2">Réponse / Validation</h4>
-                              <div>
-                                  <label className="block text-xs font-semibold text-gray-500 mb-1">Statut</label>
-                                  <select value={newStatus} onChange={e => setNewStatus(e.target.value as ApprovalStatus)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none font-medium bg-white">
-                                      <option value={ApprovalStatus.APPROVED}>Approuvé</option>
-                                      <option value={ApprovalStatus.REJECTED}>Non Approuvé</option>
-                                      <option value={ApprovalStatus.NO_RESPONSE}>Sans réponse</option>
-                                      <option value={ApprovalStatus.PENDING}>En cours de révision</option>
-                                  </select>
-                              </div>
-                              <div className="grid grid-cols-2 gap-4">
-                                  <div>
-                                      <label className="block text-xs font-semibold text-gray-500 mb-1">Date</label>
-                                      <input type="date" value={newObservationDate} onChange={e => setNewObservationDate(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none bg-white" />
-                                  </div>
-                                  <div>
-                                      <label className="block text-xs font-semibold text-gray-500 mb-1">Réf</label>
-                                      <input value={newObservationRef} onChange={e => setNewObservationRef(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none bg-white" placeholder="OBS-..." />
-                                  </div>
-                              </div>
-                              <div className="grid grid-cols-2 gap-4 mt-2">
-                                  <div>
-                                      <label className="block text-[10px] font-bold text-blue-600 uppercase mb-1">Date d'envoi Approbation</label>
-                                      <input type="date" value={newApprovedSendDate} onChange={e => setNewApprovedSendDate(e.target.value)} className="w-full p-2 border border-blue-100 rounded focus:ring-2 focus:ring-blue-500 outline-none bg-blue-50/30 text-xs" />
-                                  </div>
-                                  <div>
-                                      <label className="block text-[10px] font-bold text-green-600 uppercase mb-1">Date de retour Approbation</label>
-                                      <input type="date" value={newApprovedReturnDate} onChange={e => setNewApprovedReturnDate(e.target.value)} className="w-full p-2 border border-green-100 rounded focus:ring-2 focus:ring-green-500 outline-none bg-green-50/30 text-xs" />
-                                  </div>
-                              </div>
-                              {/* File List Obs */}
-                              <div>
-                                  <label className="block text-xs font-semibold text-gray-500 mb-1">Fichiers Annotés (Visa)</label>
-                                  {newObservationFiles.map((file, idx) => (
-                                      <div key={idx} className="flex items-center gap-2 text-xs bg-white border p-1 rounded mb-1">
-                                          <span className="truncate flex-1">Note {idx + 1}</span>
-                                          <button type="button" onClick={() => setAttachmentToDelete({ type: 'observation', index: idx })} className="text-red-500"><X size={12}/></button>
-                                      </div>
-                                  ))}
-                                  {newObservationFiles.length < 3 && (
-                                    <div className="relative mt-2">
-                                        <input type="file" id="obs-upload" className="hidden" onChange={(e) => handleModalFileChange(e, 'observation')} />
-                                        <label htmlFor="obs-upload" className="flex items-center justify-center gap-2 w-full p-2 border-2 border-dashed border-gray-300 rounded text-gray-500 hover:border-amber-500 hover:text-amber-500 cursor-pointer text-xs bg-white">
-                                            <UploadCloud size={14} /> Ajouter Note/Visa
-                                        </label>
+                            {/* Observation / Response Info */}
+                            <div className="bg-white dark:bg-slate-800/50 p-5 rounded-xl border border-gray-100 dark:border-slate-800 shadow-sm space-y-4">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <CheckCircle2 size={16} className="text-amber-600" />
+                                    <h4 className="text-sm font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Statut & Observation</h4>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 mb-1">Statut Approbation</label>
+                                    <select value={newStatus} onChange={e => setNewStatus(e.target.value as ApprovalStatus)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none font-bold dark:bg-slate-700 dark:border-slate-600 dark:text-white shadow-sm">
+                                        <option value={ApprovalStatus.APPROVED}>APPROUVÉ</option>
+                                        <option value={ApprovalStatus.APPROVED_WITH_COMMENTS}>APPROUVÉ (R)</option>
+                                        <option value={ApprovalStatus.REJECTED}>NON APPROUVÉ</option>
+                                        <option value={ApprovalStatus.NO_RESPONSE}>SANS RÉPONSE</option>
+                                        <option value={ApprovalStatus.PENDING}>EN COURS</option>
+                                    </select>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 mb-1">Date Réponse</label>
+                                        <input type="date" value={newObservationDate} onChange={e => setNewObservationDate(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none dark:bg-slate-700 dark:border-slate-600 dark:text-white shadow-sm" />
                                     </div>
-                                  )}
-                              </div>
-                          </div>
-                      </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 mb-1">Réf. Réponse</label>
+                                        <input value={newObservationRef} onChange={e => setNewObservationRef(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none dark:bg-slate-700 dark:border-slate-600 dark:text-white shadow-sm" placeholder="OBS-..." />
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4 pt-2 border-t dark:border-slate-800">
+                                    <div>
+                                        <label className="block text-[9px] font-black text-blue-600 dark:text-blue-400 uppercase mb-1">Date d'Envoi Doc. Approuvé</label>
+                                        <input type="date" value={newApprovedSendDate} onChange={e => setNewApprovedSendDate(e.target.value)} className="w-full p-2 border border-blue-100 dark:border-blue-900 rounded bg-blue-50/20 dark:bg-blue-900/10 text-xs dark:text-blue-100 focus:ring-2 focus:ring-blue-500 outline-none shadow-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[9px] font-black text-green-600 dark:text-green-400 uppercase mb-1">Date de Retour Doc. Approuvé</label>
+                                        <input type="date" value={newApprovedReturnDate} onChange={e => setNewApprovedReturnDate(e.target.value)} className="w-full p-2 border border-green-100 dark:border-green-900 rounded bg-green-50/20 dark:bg-green-900/10 text-xs dark:text-green-100 focus:ring-2 focus:ring-green-500 outline-none shadow-sm" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 mb-1">Fichiers Annotés</label>
+                                    <div className="space-y-1">
+                                        {newObservationFiles.map((file, idx) => (
+                                            <div key={idx} className="flex items-center gap-2 text-[11px] bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 p-1.5 rounded-lg group">
+                                                <FileText size={12} className="text-amber-500" />
+                                                <span className="truncate flex-1 font-medium">Note {idx + 1}</span>
+                                                <button type="button" onClick={() => setAttachmentToDelete({ type: 'observation', index: idx })} className="text-gray-400 hover:text-red-500 transition-colors"><X size={14}/></button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    {newObservationFiles.length < 3 && (
+                                        <div className="relative mt-2">
+                                            <input type="file" id="obs-upload-modal" className="hidden" onChange={(e) => handleModalFileChange(e, 'observation')} />
+                                            <label htmlFor="obs-upload-modal" className="flex items-center justify-center gap-2 w-full p-2 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-lg text-slate-400 hover:border-amber-500 hover:text-amber-500 cursor-pointer text-[11px] font-bold transition-all bg-slate-50/50">
+                                                <UploadCloud size={14} /> Ajouter Note/Visa
+                                            </label>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                      )}
 
                       <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
                           <button type="button" onClick={closeAllModals} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg font-medium">Annuler</button>
@@ -1725,6 +1786,27 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                                   <option value={ApprovalStatus.NO_RESPONSE}>SANS RÉPONSE</option>
                               </select>
                           </div>
+
+                          <div className="grid grid-cols-2 gap-3 border-t pt-4 mt-2">
+                              <div>
+                                  <label className="block text-[9px] font-bold uppercase text-blue-600 mb-1">Envoi Doc. Approuvé</label>
+                                  <input 
+                                      type="date" 
+                                      value={editSendForm.approvalDate || ''} 
+                                      onChange={e => setEditSendForm({...editSendForm, approvalDate: e.target.value})}
+                                      className="w-full p-2 bg-blue-50/30 border border-blue-100 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-xs" 
+                                  />
+                              </div>
+                              <div>
+                                  <label className="block text-[9px] font-bold uppercase text-green-600 mb-1">Retour Doc. Approuvé</label>
+                                  <input 
+                                      type="date" 
+                                      value={editSendForm.returnDate || ''} 
+                                      onChange={e => setEditSendForm({...editSendForm, returnDate: e.target.value})}
+                                      className="w-full p-2 bg-green-50/30 border border-green-100 rounded-lg focus:ring-2 focus:ring-green-500 outline-none text-xs" 
+                                  />
+                              </div>
+                          </div>
                       </div>
                   </div>
                   
@@ -1746,5 +1828,6 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
           </div>
       )}
     </div>
+    </>
   );
 };
