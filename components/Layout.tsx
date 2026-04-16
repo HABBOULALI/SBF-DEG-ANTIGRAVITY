@@ -160,7 +160,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
            </div>
            
            <div className="text-center text-[9px] text-slate-500 font-medium">
-             v1.3.0 - © 2024 SBF Digital
+             v1.4.0 - © 2024 SBF Digital
            </div>
         </div>
       </aside>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Plus, Filter, Download, Clock, Edit2, Save, X, Loader2, FileSpreadsheet, ChevronUp, ChevronDown, ArrowUpDown, Bell, BellRing, Calendar, Send, Trash2, AlertTriangle, UploadCloud, FileText, Search, Mic, MicOff, ListPlus, Paperclip, File as FileIcon } from 'lucide-react';
+import { Plus, Filter, Download, Clock, Edit2, Save, X, Loader2, FileSpreadsheet, ChevronUp, ChevronDown, ArrowUpDown, Bell, BellRing, Calendar, Send, Trash2, AlertTriangle, UploadCloud, FileText, Search, Mic, MicOff, Paperclip, File as FileIcon } from 'lucide-react';
 import { BTPDocument, ApprovalStatus, Revision, SendRecord } from '../types';
 import { Logo } from './Logo';
 import { useAuth } from '../context/AuthContext';
@@ -55,6 +55,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
   const canDelete = isAdmin;
 
   const [filter, setFilter] = useState<ApprovalStatus | 'ALL'>(initialFilter || 'ALL');
+  const [natureFilter, setNatureFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState(''); // State pour la recherche textuelle
   const [isListening, setIsListening] = useState(false); // State pour le micro
 
@@ -93,14 +94,24 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
     projectCode: 'PRJ-2024-HZ',
     projectName: 'Construction Siège Horizon',
     logo: '',
-    logoMDO: ''
+    logoMDO: '',
+    documentNatures: ['Plans', 'Notes de calcul', 'Fiches Techniques', 'Documents Administratifs']
   });
 
   const loadSettings = () => {
     const saved = localStorage.getItem('btp-app-settings');
     if (saved) {
         const parsed = JSON.parse(saved);
-        setAppSettings(prev => ({ ...prev, ...parsed }));
+        if (parsed && !parsed.documentNatures && parsed.documentTypes) {
+            parsed.documentNatures = parsed.documentTypes;
+        }
+        if (parsed && !parsed.documentNatures) {
+            parsed.documentNatures = ['Plans', 'Notes de calcul', 'Fiches Techniques', 'Documents Administratifs'];
+        }
+        setAppSettings(prev => {
+            const newSettings = { ...prev, ...parsed };
+            return newSettings;
+        });
     }
   };
 
@@ -121,6 +132,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
   // Form State
   const [newLot, setNewLot] = useState('01');
   const [newCl, setNewCl] = useState('A');
+  const [newNature, setNewNature] = useState('');
   const [newPoste, setNewPoste] = useState('GC');
   const [newCode, setNewCode] = useState('');
   const [newName, setNewName] = useState('');
@@ -138,6 +150,8 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
   
   const [newStatus, setNewStatus] = useState<ApprovalStatus>(ApprovalStatus.NO_RESPONSE);
   const [newApprovedSendDate, setNewApprovedSendDate] = useState('');
+  const [newApprovedSendRef, setNewApprovedSendRef] = useState('');
+  const [newApprovedSendFiles, setNewApprovedSendFiles] = useState<string[]>([]);
   const [newApprovedReturnDate, setNewApprovedReturnDate] = useState('');
 
   // --- LOGIQUE RECHERCHE VOCALE ---
@@ -195,73 +209,74 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
       return rows;
   }, [documents]);
 
-  // 2. FILTRER (Status + Recherche Texte)
-  const filteredRows = allRows.filter(({ rev, doc }) => {
-    // Filtre Statut
-    const matchStatus = filter === 'ALL' || rev.status === filter;
-    
-    // Filtre Recherche (Code, Nom, Lot, Poste)
-    const lowerQuery = searchQuery.toLowerCase();
-    const matchSearch = !searchQuery || 
-        doc.code.toLowerCase().includes(lowerQuery) ||
-        doc.name.toLowerCase().includes(lowerQuery) ||
-        doc.lot.toLowerCase().includes(lowerQuery) ||
-        doc.poste.toLowerCase().includes(lowerQuery);
+  // 2. FILTRER (Status + Recherche Texte + Nature)
+  const filteredRows = useMemo(() => {
+    return allRows.filter(({ rev, doc }) => {
+        // Filtre Statut
+        const matchStatus = filter === 'ALL' || rev.status === filter;
+        
+        // Filtre Nature
+        const matchNature = natureFilter === 'ALL' || doc.nature === natureFilter;
+        
+        // Filtre Recherche (Code, Nom, Lot, Poste)
+        const lowerQuery = searchQuery.toLowerCase();
+        const matchSearch = !searchQuery || 
+            doc.code.toLowerCase().includes(lowerQuery) ||
+            doc.name.toLowerCase().includes(lowerQuery) ||
+            doc.lot.toLowerCase().includes(lowerQuery) ||
+            doc.poste.toLowerCase().includes(lowerQuery);
 
-    return matchStatus && matchSearch;
-  });
+        return matchStatus && matchNature && matchSearch;
+    });
+  }, [allRows, filter, natureFilter, searchQuery]);
 
   // 3. TRIER (SORT)
   const sortedRows = useMemo(() => {
     let sortableItems = [...filteredRows];
-    
-    // Default Sort: Code ASC, then Index ASC
-    if (sortConfig === null) {
-        sortableItems.sort((a, b) => {
+    // Primary Sorting for Grouping: NATURE
+    sortableItems.sort((a, b) => {
+        const natA = a.doc.nature || 'Non classé';
+        const natB = b.doc.nature || 'Non classé';
+        if (natA < natB) return -1;
+        if (natA > natB) return 1;
+
+        // Within group, follow secondary sort
+        if (sortConfig === null) {
             if (a.doc.code < b.doc.code) return -1;
             if (a.doc.code > b.doc.code) return 1;
-            // Same code, sort by index
             if (a.rev.index < b.rev.index) return -1;
             if (a.rev.index > b.rev.index) return 1;
             return 0;
-        });
-        return sortableItems;
-    }
+        }
 
-    // Custom Sort
-    sortableItems.sort((a, b) => {
-      const rowA = a;
-      const rowB = b;
-      
-      let valA: string = '';
-      let valB: string = '';
+        const rowA = a;
+        const rowB = b;
+        let valA: string = '';
+        let valB: string = '';
 
-      switch (sortConfig.key) {
-          case 'lot': valA = rowA.doc.lot; valB = rowB.doc.lot; break;
-          case 'classement': valA = rowA.doc.classement; valB = rowB.doc.classement; break;
-          case 'poste': valA = rowA.doc.poste; valB = rowB.doc.poste; break;
-          case 'name': valA = rowA.doc.name; valB = rowB.doc.name; break;
-          case 'code': valA = rowA.doc.code; valB = rowB.doc.code; break;
-          case 'index': valA = rowA.rev.index; valB = rowB.rev.index; break;
-          case 'transmittalDate': valA = rowA.rev.transmittalDate; valB = rowB.rev.transmittalDate; break;
-          case 'transmittalRef': valA = rowA.rev.transmittalRef; valB = rowB.rev.transmittalRef; break;
-          case 'observationDate': valA = rowA.rev.observationDate || ''; valB = rowB.rev.observationDate || ''; break;
-          case 'observationRef': valA = rowA.rev.observationRef || ''; valB = rowB.rev.observationRef || ''; break;
-          case 'status': valA = rowA.rev.status; valB = rowB.rev.status; break;
-          case 'approvalDate': valA = rowA.rev.approvalDate || ''; valB = rowB.rev.approvalDate || ''; break;
-          case 'returnDate': valA = rowA.rev.returnDate || ''; valB = rowB.rev.returnDate || ''; break;
-          case 'approvedSendDate': valA = rowA.rev.approvedSendDate || ''; valB = rowB.rev.approvedSendDate || ''; break;
-          case 'approvedReturnDate': valA = rowA.rev.approvedReturnDate || ''; valB = rowB.rev.approvedReturnDate || ''; break;
-      }
+        switch (sortConfig.key) {
+           case 'lot': valA = rowA.doc.lot; valB = rowB.doc.lot; break;
+           case 'classement': valA = rowA.doc.classement; valB = rowB.doc.classement; break;
+           case 'poste': valA = rowA.doc.poste; valB = rowB.doc.poste; break;
+           case 'name': valA = rowA.doc.name; valB = rowB.doc.name; break;
+           case 'code': valA = rowA.doc.code; valB = rowB.doc.code; break;
+           case 'index': valA = rowA.rev.index; valB = rowB.rev.index; break;
+           case 'transmittalDate': valA = rowA.rev.transmittalDate; valB = rowB.rev.transmittalDate; break;
+           case 'transmittalRef': valA = rowA.rev.transmittalRef; valB = rowB.rev.transmittalRef; break;
+           case 'observationDate': valA = rowA.rev.observationDate || ''; valB = rowB.rev.observationDate || ''; break;
+           case 'observationRef': valA = rowA.rev.observationRef || ''; valB = rowB.rev.observationRef || ''; break;
+           case 'status': valA = rowA.rev.status; valB = rowB.rev.status; break;
+           case 'approvalDate': valA = rowA.rev.approvalDate || ''; valB = rowB.rev.approvalDate || ''; break;
+           case 'returnDate': valA = rowA.rev.returnDate || ''; valB = rowB.rev.returnDate || ''; break;
+           case 'approvedSendDate': valA = rowA.rev.approvedSendDate || ''; valB = rowB.rev.approvedSendDate || ''; break;
+           case 'approvedReturnDate': valA = rowA.rev.approvedReturnDate || ''; valB = rowB.rev.approvedReturnDate || ''; break;
+        }
 
-      if (valA < valB) {
-        return sortConfig.direction === 'asc' ? -1 : 1;
-      }
-      if (valA > valB) {
-        return sortConfig.direction === 'asc' ? 1 : -1;
-      }
-      return 0;
+        if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
     });
+
     return sortableItems;
   }, [filteredRows, sortConfig]);
 
@@ -303,7 +318,18 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
     setNewName('');
     setNewIndex('00');
     setNewLot('01');
+    
+    // Smart default for Nature
+    if (natureFilter !== 'ALL') {
+        setNewNature(natureFilter);
+    } else if (appSettings.documentNatures && appSettings.documentNatures.length > 0) {
+        setNewNature(appSettings.documentNatures[0]);
+    } else {
+        setNewNature('Plans');
+    }
+
     setNewCl('A');
+
     setNewPoste('GC');
     setNewTransmittalDate(new Date().toISOString().slice(0, 10));
     setNewTransmittalRef('');
@@ -312,6 +338,10 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
     setNewObservationRef('');
     setNewObservationFiles([]);
     setNewStatus(ApprovalStatus.NO_RESPONSE);
+    setNewApprovedSendDate('');
+    setNewApprovedSendRef('');
+    setNewApprovedSendFiles([]);
+    setNewApprovedReturnDate('');
   };
 
   const handleCreateClick = () => {
@@ -325,6 +355,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
       setEditingRevId(rev.id);
       setNewLot(doc.lot);
       setNewCl(doc.classement);
+      setNewNature(doc.nature || '');
       setNewPoste(doc.poste);
       setNewCode(doc.code);
       setNewName(doc.name);
@@ -341,6 +372,8 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
       setNewObservationFiles(oFiles);
       setNewStatus(rev.status);
       setNewApprovedSendDate(rev.approvedSendDate || '');
+      setNewApprovedSendRef(rev.approvedSendRef || '');
+      setNewApprovedSendFiles(rev.approvedSendFiles || []);
       setNewApprovedReturnDate(rev.approvedReturnDate || '');
       setIsModalOpen(true);
   };
@@ -364,6 +397,8 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
           setNewTransmittalFiles(prev => prev.filter((_, i) => i !== attachmentToDelete.index));
       } else if (attachmentToDelete.type === 'observation') {
           setNewObservationFiles(prev => prev.filter((_, i) => i !== attachmentToDelete.index));
+      } else if (attachmentToDelete.type === 'approval') {
+          setNewApprovedSendFiles(prev => prev.filter((_, i) => i !== attachmentToDelete.index));
       }
       setAttachmentToDelete(null);
   };
@@ -378,6 +413,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
         const updatedDoc: BTPDocument = { ...docToUpdate };
         updatedDoc.lot = newLot;
         updatedDoc.classement = newCl;
+        updatedDoc.nature = newNature;
         updatedDoc.poste = newPoste;
         updatedDoc.code = newCode;
         updatedDoc.name = newName;
@@ -394,6 +430,8 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
             observationRef: newObservationRef,
             observationFiles: newObservationFiles,
             approvedSendDate: newApprovedSendDate,
+            approvedSendRef: newApprovedSendRef,
+            approvedSendFiles: newApprovedSendFiles,
             approvedReturnDate: newApprovedReturnDate,
             status: newStatus 
         };
@@ -430,6 +468,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
             id: crypto.randomUUID(),
             lot: newLot,
             classement: newCl,
+            nature: newNature,
             poste: newPoste,
             code: newCode,
             name: newName,
@@ -442,6 +481,8 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                 transmittalDate: newTransmittalDate,
                 transmittalFiles: newTransmittalFiles,
                 approvedSendDate: newApprovedSendDate,
+                approvedSendRef: newApprovedSendRef,
+                approvedSendFiles: newApprovedSendFiles,
                 approvedReturnDate: newApprovedReturnDate,
                 status: newStatus,
                 observationFiles: []
@@ -493,7 +534,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
       setReminderModal(null);
   };
 
-  const triggerFileUpload = (docId: string, revId: string, type: 'transmittal' | 'observation', sendId?: string) => {
+  const triggerFileUpload = (docId: string, revId: string, type: 'transmittal' | 'observation' | 'approval', sendId?: string) => {
       setUploadTarget({ docId, revId, type, sendId });
       setTimeout(() => {
           fileInputRef.current?.click();
@@ -523,12 +564,26 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                               } else {
                                   send.transmittalFiles = [...currentFiles, fileDataUrl];
                               }
-                          } else {
+                          } else if (uploadTarget.type === 'observation') {
                               const currentFiles = send.observationFiles || [];
                               if (currentFiles.length >= 3) {
                                   alert("Maximum 3 notes autorisées par envoi.");
                               } else {
                                   send.observationFiles = [...currentFiles, fileDataUrl];
+                              }
+                          } else if (uploadTarget.type === 'approval') {
+                              const currentFiles = send.approvalFiles || [];
+                              if (currentFiles.length >= 3) {
+                                  alert("Maximum 3 fichiers approuvés autorisés par envoi.");
+                              } else {
+                                  send.approvalFiles = [...currentFiles, fileDataUrl];
+                              }
+                          } else if (uploadTarget.type === 'approval') {
+                              const currentFiles = send.approvalFiles || [];
+                              if (currentFiles.length >= 3) {
+                                  alert("Maximum 3 fichiers approuvés autorisés par envoi.");
+                              } else {
+                                  send.approvalFiles = [...currentFiles, fileDataUrl];
                               }
                           }
                           onUpdateDocument(updatedDoc);
@@ -543,12 +598,20 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                               rev.transmittalFiles = [...currentFiles, fileDataUrl];
                               onUpdateDocument(updatedDoc);
                           }
-                      } else {
+                      } else if (uploadTarget.type === 'observation') {
                           const currentFiles = rev.observationFiles || [];
                           if (currentFiles.length >= 3) {
                               alert("Maximum 3 notes d'observation autorisées.");
                           } else {
                               rev.observationFiles = [...currentFiles, fileDataUrl];
+                              onUpdateDocument(updatedDoc);
+                          }
+                      } else if (uploadTarget.type === 'approval') {
+                          const currentFiles = rev.approvedSendFiles || [];
+                          if (currentFiles.length >= 3) {
+                              alert("Maximum 3 fichiers approuvés autorisés.");
+                          } else {
+                              rev.approvedSendFiles = [...currentFiles, fileDataUrl];
                               onUpdateDocument(updatedDoc);
                           }
                       }
@@ -583,7 +646,12 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
     const oldStatus = doc.revisions[revIdx].sendHistory?.[sendIdx].status;
     const newStatus = editSendForm.status;
 
-    sendHistory[sendIdx] = { ...sendHistory[sendIdx], ...editSendForm } as SendRecord;
+    sendHistory[sendIdx] = { 
+        ...sendHistory[sendIdx], 
+        ...editSendForm,
+        approvalRef: editSendForm.approvalRef,
+        approvalFiles: editSendForm.approvalFiles
+    } as SendRecord;
     rev.sendHistory = sendHistory;
     updatedDoc.revisions[revIdx] = rev;
 
@@ -651,7 +719,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
     onUpdateDocument(updatedDoc);
   };
 
-  const handleModalFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'transmittal' | 'observation') => {
+  const handleModalFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'transmittal' | 'observation' | 'approval') => {
       const file = e.target.files?.[0];
       if (!file) return;
       const reader = new FileReader();
@@ -664,12 +732,19 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
               }
               setNewTransmittalFiles(prev => [...prev, result]);
           }
-          else {
+          else if (type === 'observation') {
               if (newObservationFiles.length >= 3) {
                   alert("Maximum 3 fichiers.");
                   return;
               }
               setNewObservationFiles(prev => [...prev, result]);
+          }
+          else if (type === 'approval') {
+              if (newApprovedSendFiles.length >= 3) {
+                  alert("Maximum 3 fichiers.");
+                  return;
+              }
+              setNewApprovedSendFiles(prev => [...prev, result]);
           }
       };
       reader.readAsDataURL(file);
@@ -808,29 +883,40 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
             cell.border = { top: {style:'thin'}, left: {style:'thin'}, bottom: {style:'thin'}, right: {style:'thin'} };
         };
 
-        // Merges for headers
+        // Merges for headers (Updated to 3 cols each for Envoi and Note)
         worksheet.mergeCells(7, 1, 8, 1); worksheet.getCell(7, 1).value = "N°";
         worksheet.mergeCells(7, 2, 8, 2); worksheet.getCell(7, 2).value = "Lot";
         worksheet.mergeCells(7, 3, 8, 3); worksheet.getCell(7, 3).value = "Poste";
         worksheet.mergeCells(7, 4, 8, 4); worksheet.getCell(7, 4).value = "Type";
-        worksheet.mergeCells(7, 5, 8, 5); worksheet.getCell(7, 5).value = "CODE";
-        worksheet.mergeCells(7, 6, 8, 6); worksheet.getCell(7, 6).value = "Indice";
-        worksheet.mergeCells(7, 7, 8, 7); worksheet.getCell(7, 7).value = "Désignation Document";
+        worksheet.mergeCells(7, 5, 8, 5); worksheet.getCell(7, 5).value = "Nature";
+        worksheet.mergeCells(7, 6, 8, 6); worksheet.getCell(7, 6).value = "CODE";
+        worksheet.mergeCells(7, 7, 8, 7); worksheet.getCell(7, 7).value = "Indice";
+        worksheet.mergeCells(7, 8, 8, 8); worksheet.getCell(7, 8).value = "Désignation Document";
         
-        worksheet.mergeCells(7, 8, 7, 9); worksheet.getCell(7, 8).value = "Transmis par SBF";
-        worksheet.getCell(8, 8).value = "Date Envoi";
-        worksheet.getCell(8, 9).value = "Réf Envoi";
+        // Group: Date d'Envoi (Col 9, 10, 11)
+        worksheet.mergeCells(7, 9, 7, 11); worksheet.getCell(7, 9).value = "Date d'Envoi";
+        worksheet.getCell(8, 9).value = "Date";
+        worksheet.getCell(8, 10).value = "Réf";
+        worksheet.getCell(8, 11).value = "Lien P.J";
         
-        worksheet.mergeCells(7, 10, 7, 11); worksheet.getCell(7, 10).value = "Note d'observation";
-        worksheet.getCell(8, 10).value = "Date Rép.";
-        worksheet.getCell(8, 11).value = "Réf Rép.";
+        // Group: Note d'Obs. (Col 12, 13, 14)
+        worksheet.mergeCells(7, 12, 7, 14); worksheet.getCell(7, 12).value = "Note d'Obs.";
+        worksheet.getCell(8, 12).value = "Date";
+        worksheet.getCell(8, 13).value = "Réf";
+        worksheet.getCell(8, 14).value = "Lien P.J";
         
-        worksheet.mergeCells(7, 12, 8, 12); worksheet.getCell(7, 12).value = "Statut";
-        worksheet.mergeCells(7, 13, 8, 13); worksheet.getCell(7, 13).value = "Date Visa";
-        worksheet.mergeCells(7, 14, 8, 14); worksheet.getCell(7, 14).value = "Date Retour";
-        worksheet.mergeCells(7, 15, 8, 15); worksheet.getCell(7, 15).value = "Destinataire";
+        worksheet.mergeCells(7, 15, 8, 15); worksheet.getCell(7, 15).value = "Statut";
+        
+        // Group: Envoi App. (Col 16, 17, 18)
+        worksheet.mergeCells(7, 16, 7, 18); worksheet.getCell(7, 16).value = "Envoi App.";
+        worksheet.getCell(8, 16).value = "Date";
+        worksheet.getCell(8, 17).value = "Réf";
+        worksheet.getCell(8, 18).value = "Lien P.J";
+        
+        worksheet.mergeCells(7, 19, 8, 19); worksheet.getCell(7, 19).value = "Ret. App.";
+        worksheet.mergeCells(7, 20, 8, 20); worksheet.getCell(7, 20).value = "Destinataire";
 
-        for(let c=1; c<=15; c++) {
+        for(let c=1; c<=20; c++) {
             applyHeaderStyle(worksheet.getCell(7, c));
             applyHeaderStyle(worksheet.getCell(8, c));
         }
@@ -857,15 +943,20 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                     row.doc.lot,
                     row.doc.poste,
                     row.doc.classement,
+                    row.doc.nature || '-',
                     row.doc.code,
                     row.rev.index,
                     row.doc.name,
                     s.transmittalDate || '-',
                     s.transmittalRef || '-',
+                    s.transmittalFiles && s.transmittalFiles.length > 0 ? s.transmittalFiles[0] : '-',
                     s.observationDate || '-',
                     s.observationRef || '-',
+                    s.observationFiles && s.observationFiles.length > 0 ? s.observationFiles[0] : '-',
                     getStatusText(s.status),
                     s.approvalDate || '-',
+                    s.approvalRef || '-',
+                    s.approvalFiles && s.approvalFiles.length > 0 ? s.approvalFiles[0] : '-',
                     s.returnDate || '-',
                     s.recipientName || '-'
                 ]);
@@ -881,17 +972,17 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
 
                     cell.alignment = { 
                         vertical: 'middle', 
-                        horizontal: [1,2,3,4,6,8,9,10,11,12,13,14,15].includes(colNumber) ? 'center' : 'left',
-                        wrapText: colNumber === 7 // Only wrap doc name
+                        horizontal: [1,2,3,4,5,7,9,10,11,12,13,14,15,16,17,18,19,20].includes(colNumber) ? 'center' : 'left',
+                        wrapText: colNumber === 8 // Only wrap doc name
                     };
                     cell.font = { size: 8 };
-                    if (colNumber === 5) cell.font = { bold: true, size: 8 };
+                    if (colNumber === 6) cell.font = { bold: true, size: 8 };
                     
-                    if (colNumber === 12) {
+                    if (colNumber === 15) {
                         if (s.status === ApprovalStatus.APPROVED) cell.font = { color: { argb: 'FF15803D' }, bold: true, size: 8 };
                         else if (s.status === ApprovalStatus.REJECTED) cell.font = { color: { argb: 'FFB91C1C' }, bold: true, size: 8 };
                     }
-                    if (colNumber === 15) {
+                    if (colNumber === 20) {
                         cell.font = { color: { argb: 'FF1E40AF' }, bold: true, size: 8 };
                     }
                 });
@@ -900,16 +991,17 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
             // Merge metadata cells if multiple sends
             if (sends.length > 1) {
                 const lastRowIdx = worksheet.rowCount;
-                for (let col = 1; col <= 7; col++) {
+                for (let col = 1; col <= 8; col++) {
                     worksheet.mergeCells(firstRowIdx, col, lastRowIdx, col);
                 }
             }
         });
 
-        // 6. Column Widths (Reduced as requested)
+        // 6. Column Widths
         worksheet.columns = [
-            { width: 4 }, { width: 6 }, { width: 6 }, { width: 6 }, { width: 18 }, { width: 6 }, { width: 40 }, 
-            { width: 11 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 13 }
+            { width: 4 }, { width: 6 }, { width: 6 }, { width: 6 }, { width: 12 }, { width: 18 }, { width: 6 }, { width: 40 }, 
+            { width: 11 }, { width: 11 }, { width: 15 }, { width: 11 }, { width: 11 }, { width: 15 }, 
+            { width: 14 }, { width: 11 }, { width: 11 }, { width: 15 }, { width: 11 }, { width: 13 }
         ];
 
         // Final Logo adjustment
@@ -984,6 +1076,21 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                       <option value={ApprovalStatus.NO_RESPONSE}>Sans réponse</option>
                     </select>
                     <Filter size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                </div>
+
+                <div className="relative h-full">
+                    <select 
+                      className="h-full pl-9 pr-8 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none appearance-none bg-white shadow-sm cursor-pointer hover:border-blue-400 transition-colors font-medium text-blue-700"
+                      value={natureFilter}
+                      onChange={(e) => setNatureFilter(e.target.value)}
+                    >
+                      <option value="ALL">Toutes les natures</option>
+                      {appSettings.documentNatures?.map(t => (
+                          <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                    <FileText size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-500" />
+                    <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                 </div>
             </div>
 
@@ -1070,13 +1177,14 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                   <SortHeader label="Indice" sortKey="index" className="w-12 text-center" rowSpan={2} />
                   <SortHeader label="Désignation Document" sortKey="name" className="min-w-[200px]" rowSpan={2} />
                   
-                  {/* Dynamic ColSpan for PDF Export */}
-                  <th id="th-transmis" colSpan={isExportingPdf ? 2 : 3} className="px-2 py-1 border border-slate-600 text-center bg-slate-900 dark:bg-slate-800 font-bold align-middle transition-colors">Transmis par SBF</th>
-                  <th id="th-visa" colSpan={isExportingPdf ? 2 : 3} className="px-2 py-1 border border-slate-600 text-center bg-slate-900 dark:bg-slate-800 font-bold align-middle transition-colors">Note d'Obser</th>
+                  {/* Group headers with 3 sub-columns */}
+                  <th id="th-transmis" colSpan={isExportingPdf ? 2 : 3} className="px-2 py-1 border border-slate-600 text-center bg-slate-900 dark:bg-slate-800 font-bold align-middle transition-colors">Date d'Envoi</th>
+                  <th id="th-visa" colSpan={isExportingPdf ? 2 : 3} className="px-2 py-1 border border-slate-600 text-center bg-slate-900 dark:bg-slate-800 font-bold align-middle transition-colors">Note d'Obs.</th>
                   
                   <SortHeader label="Statut" sortKey="status" className="w-32 text-center" rowSpan={2} />
                   <th className="px-2 py-2 border border-slate-600 text-center font-bold align-middle w-24" rowSpan={2}>Destinataire</th>
-                  <SortHeader label="Envoi App." sortKey="approvedSendDate" className="w-24 text-center" rowSpan={2} />
+                  
+                  <th id="th-envoi-app" colSpan={isExportingPdf ? 2 : 3} className="px-2 py-1 border border-slate-600 text-center bg-slate-900 dark:bg-slate-800 font-bold align-middle transition-colors">Envoi App.</th>
                   <SortHeader label="Ret. App." sortKey="approvedReturnDate" className="w-24 text-center" rowSpan={2} />
                   {/* Hide Actions Column in PDF and for Viewers */}
                   {!isExportingPdf && canModify && <th className="px-2 py-2 border border-slate-600 text-center font-bold align-middle no-print" rowSpan={2}>Actions</th>}
@@ -1084,31 +1192,49 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                 <tr>
                   <SortHeader label="Date" sortKey="transmittalDate" className="w-24 bg-slate-800 text-center" />
                   <SortHeader label="Réf" sortKey="transmittalRef" className="w-24 bg-slate-800 text-center" />
-                  {/* Conditionally Render File Icon Header */}
-                  {!isExportingPdf && <th className="px-2 py-1 border border-slate-600 w-10 text-center align-middle no-print"><Paperclip size={12} className="mx-auto"/></th>}
+                  {/* Conditionally Render File Icon Header with PJ title */}
+                  {!isExportingPdf && <th className="px-1 py-1 border border-slate-600 w-10 text-center align-middle no-print text-[7px]">P.J</th>}
                   
                   <SortHeader label="Date" sortKey="observationDate" className="w-24 bg-slate-800 text-center" />
                   <SortHeader label="Réf" sortKey="observationRef" className="w-24 bg-slate-800 text-center" />
-                   {/* Conditionally Render File Icon Header */}
-                  {!isExportingPdf && <th className="px-2 py-1 border border-slate-600 w-10 text-center align-middle no-print"><Paperclip size={12} className="mx-auto"/></th>}
+                   {/* Conditionally Render File Icon Header with PJ title */}
+                  {!isExportingPdf && <th className="px-1 py-1 border border-slate-600 w-10 text-center align-middle no-print text-[7px]">P.J</th>}
+
+                  <SortHeader label="Date" sortKey="approvedSendDate" className="w-24 bg-slate-800 text-center" />
+                  <SortHeader label="Réf" sortKey="approvedSendRef" className="w-24 bg-slate-800 text-center" />
+                  {!isExportingPdf && <th className="px-1 py-1 border border-slate-600 w-10 text-center align-middle no-print text-[7px]">P.J</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {sortedRows.length === 0 ? (
                   <tr>
-                    <td colSpan={16} className="p-8 text-center text-gray-500">
+                   <td colSpan={20} className="p-8 text-center text-gray-500">
                       Aucun document trouvé.
                     </td>
                   </tr>
                 ) : sortedRows.map(({ doc, rev, isLatest }, idx) => {
+                  const currentNature = doc.nature || 'Général / Sans Nature';
+                  const prevNature = idx > 0 ? sortedRows[idx-1].doc.nature || 'Général / Sans Nature' : null;
+                  const showNatureHeader = currentNature !== prevNature;
+
                   // @ts-ignore
                   const tFiles = rev.transmittalFiles || (rev.transmittalFile ? [rev.transmittalFile] : []);
                   // @ts-ignore
                   const oFiles = rev.observationFiles || (rev.observationFile ? [rev.observationFile] : []);
 
                   return (
+                    <React.Fragment key={`${doc.id}-${rev.id}`}>
+                      {showNatureHeader && (
+                        <tr className="bg-slate-100 dark:bg-slate-800 transition-colors border-y border-gray-200 dark:border-slate-700">
+                          <td colSpan={20} className="px-3 py-1.5 text-[10px] font-black uppercase text-blue-700 dark:text-blue-400 tracking-widest bg-gradient-to-r from-blue-50/50 to-transparent">
+                             <div className="flex items-center gap-2">
+                               <div className="w-1.5 h-4 bg-blue-600 rounded-full"></div>
+                               {currentNature}
+                             </div>
+                          </td>
+                        </tr>
+                      )}
                     <tr 
-                      key={`${doc.id}-${rev.id}`} 
                       className={`hover:bg-blue-50/50 transition-colors group ${!isLatest ? 'bg-gray-50/50 text-gray-400 text-xs italic' : ''}`}
                     >
                       <td className="px-1.5 py-1 border border-gray-300 dark:border-slate-700 text-center font-medium text-gray-400 align-middle text-[10px]">{idx + 1}</td>
@@ -1297,9 +1423,49 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                               })()
                           )}
                       </td>
-                      <td className="px-1.5 py-1 border border-gray-300 dark:border-slate-700 text-center align-middle bg-slate-50/10 font-bold text-blue-700 dark:text-blue-400 w-24">
-                          {rev.approvedSendDate ? new Date(rev.approvedSendDate).toLocaleDateString('fr-FR') : '-'}
+                      {/* Envoi Approuvé Group (3 sub-columns) */}
+                      <td className="px-2 py-3 text-center border border-gray-300 align-middle whitespace-nowrap">
+                          {rev.sendHistory && rev.sendHistory.length > 0 ? (
+                              <div className="flex flex-col gap-2">{rev.sendHistory.map((s, i) => <div key={i} className="h-[24px] flex items-center justify-center">{s.approvalDate || '-'}</div>)}</div>
+                          ) : (rev.approvedSendDate || '-')}
                       </td>
+                      <td className="px-2 py-3 text-center border border-gray-300 text-xs align-middle whitespace-nowrap">
+                          {rev.sendHistory && rev.sendHistory.length > 0 ? (
+                              <div className="flex flex-col gap-2">{rev.sendHistory.map((s, i) => <div key={i} className="h-[24px] flex items-center justify-center font-mono">{s.approvalRef || '-'}</div>)}</div>
+                          ) : (rev.approvedSendRef || '-')}
+                      </td>
+                      {!isExportingPdf && (
+                        <td className="px-2 py-3 text-center border border-gray-300 align-middle no-print">
+                            {rev.sendHistory && rev.sendHistory.length > 0 ? (
+                                <div className="flex flex-col gap-2 scale-90">
+                                    {rev.sendHistory.map((s, i) => {
+                                        const sFiles = s.approvalFiles || [];
+                                        return (
+                                            <div key={i} className="h-[24px] flex items-center justify-center">
+                                                {sFiles.length > 0 ? (
+                                                    <button onClick={() => openFile(sFiles[0])} className="text-blue-600 hover:text-blue-800 relative inline-flex justify-center items-center">
+                                                        <FileText size={14} />
+                                                        {sFiles.length > 1 && <span className="absolute -top-2 -right-2 bg-blue-600 text-white text-[7px] w-2.5 h-2.5 rounded-full flex items-center justify-center">{sFiles.length}</span>}
+                                                    </button>
+                                                ) : (
+                                                    isLatest && canModify && <button onClick={() => triggerFileUpload(doc.id, rev.id, 'approval', s.id)} className="text-gray-300 hover:text-blue-500 inline-flex justify-center items-center"><UploadCloud size={14}/></button>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                (rev.approvedSendFiles || []).length > 0 ? (
+                                    <button onClick={() => openFile(rev.approvedSendFiles![0])} className="text-blue-600 hover:text-blue-800 relative inline-flex justify-center items-center">
+                                        <FileText size={16} />
+                                        {rev.approvedSendFiles!.length > 1 && <span className="absolute -top-2 -right-2 bg-blue-600 text-white text-[8px] w-3 h-3 rounded-full flex items-center justify-center">{rev.approvedSendFiles!.length}</span>}
+                                    </button>
+                                ) : (
+                                    isLatest && canModify && <button onClick={() => triggerFileUpload(doc.id, rev.id, 'approval')} className="text-gray-300 hover:text-blue-500 inline-flex justify-center items-center"><UploadCloud size={16}/></button>
+                                )
+                            )}
+                        </td>
+                      )}
                       <td className="px-1.5 py-1 border border-gray-300 dark:border-slate-700 text-center align-middle bg-slate-50/10 font-bold text-green-700 dark:text-green-400 w-24">
                           {rev.approvedReturnDate ? new Date(rev.approvedReturnDate).toLocaleDateString('fr-FR') : '-'}
                       </td>
@@ -1391,6 +1557,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                         </td>
                       )}
                     </tr>
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -1419,20 +1586,26 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                   <form onSubmit={handleFormSubmit} className="p-6 space-y-6">
                       {/* Identité du Document */}
                       <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm space-y-4">
-                          <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-2">Identification</h4>
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                          <div className="flex justify-between items-center mb-2">
+                              <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Identification</h4>
+                              <div className="flex items-center gap-2">
+                                  <label className="text-[11px] font-bold text-blue-600 uppercase">Nature :</label>
+                                  <select value={newNature} onChange={e => setNewNature(e.target.value)} className="p-1.5 border border-blue-200 rounded text-xs font-bold bg-blue-50 outline-none focus:ring-2 focus:ring-blue-500">
+                                      {appSettings.documentNatures?.map(t => (
+                                          <option key={t} value={t}>{t}</option>
+                                      ))}
+                                  </select>
+                              </div>
+                          </div>
+                          
+                          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                               <div>
                                   <label className="block text-xs font-semibold text-gray-500 mb-1">Lot</label>
                                   <input required value={newLot} onChange={e => setNewLot(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white" placeholder="01" />
                               </div>
                               <div>
-                                  <label className="block text-xs font-semibold text-gray-500 mb-1">Type</label>
-                                  <select value={newCl} onChange={e => setNewCl(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white">
-                                      <option value="A">A - Plans</option>
-                                      <option value="B">B - Notes</option>
-                                      <option value="C">C - Tech</option>
-                                      <option value="D">D - Admin</option>
-                                  </select>
+                                  <label className="block text-xs font-semibold text-gray-500 mb-1">Type (Code)</label>
+                                  <input required value={newCl} onChange={e => setNewCl(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none font-bold bg-white text-center" placeholder="A" />
                               </div>
                               <div>
                                   <label className="block text-xs font-semibold text-gray-500 mb-1">Poste</label>
@@ -1442,6 +1615,10 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                                   <label className="block text-xs font-semibold text-gray-500 mb-1">CODE</label>
                                   <input required value={newCode} onChange={e => setNewCode(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none font-mono bg-white" placeholder="GC-PL-001" />
                               </div>
+                              <div>
+                                  <label className="block text-xs font-semibold text-gray-500 mb-1">Indice</label>
+                                  <input required value={newIndex} onChange={e => setNewIndex(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none font-bold text-center bg-white" />
+                              </div>
                           </div>
                           <div>
                               <label className="block text-xs font-semibold text-gray-500 mb-1">Désignation Document</label>
@@ -1449,96 +1626,115 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                           </div>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          {/* Transmittal Info */}
-                          <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm space-y-4">
-                              <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-2">Envoi (Transmittal)</h4>
-                              <div className="grid grid-cols-2 gap-4">
-                                  <div>
-                                      <label className="block text-xs font-semibold text-gray-500 mb-1">Indice</label>
-                                      <input required value={newIndex} onChange={e => setNewIndex(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none font-bold text-center bg-white" />
-                                  </div>
-                                  <div>
-                                      <label className="block text-xs font-semibold text-gray-500 mb-1">Date</label>
-                                      <input type="date" required value={newTransmittalDate} onChange={e => setNewTransmittalDate(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white" />
-                                  </div>
-                              </div>
-                              <div>
-                                  <label className="block text-xs font-semibold text-gray-500 mb-1">Réf</label>
-                                  <input value={newTransmittalRef} onChange={e => setNewTransmittalRef(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white" placeholder="B-00X" />
-                              </div>
-                              {/* File List Transmittal */}
-                              <div>
-                                  <label className="block text-xs font-semibold text-gray-500 mb-1">Pièces Jointes (B.E)</label>
-                                  {newTransmittalFiles.map((file, idx) => (
-                                      <div key={idx} className="flex items-center gap-2 text-xs bg-white border p-1 rounded mb-1">
-                                          <span className="truncate flex-1">Fichier {idx + 1}</span>
-                                          <button type="button" onClick={() => setAttachmentToDelete({ type: 'transmittal', index: idx })} className="text-red-500"><X size={12}/></button>
-                                      </div>
-                                  ))}
-                                  {newTransmittalFiles.length < 3 && (
-                                    <div className="relative mt-2">
-                                        <input type="file" id="transmittal-upload" className="hidden" onChange={(e) => handleModalFileChange(e, 'transmittal')} />
-                                        <label htmlFor="transmittal-upload" className="flex items-center justify-center gap-2 w-full p-2 border-2 border-dashed border-gray-300 rounded text-gray-500 hover:border-blue-500 hover:text-blue-500 cursor-pointer text-xs bg-white">
-                                            <UploadCloud size={14} /> Ajouter Fichier
-                                        </label>
+                      {editingDocId && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {/* Transmittal Info */}
+                            <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm space-y-4">
+                                <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-2">Envoi (Transmittal)</h4>
+                                <div className="grid grid-cols-1 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 mb-1">Date d'envoi</label>
+                                        <input type="date" required value={newTransmittalDate} onChange={e => setNewTransmittalDate(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white" />
                                     </div>
-                                  )}
-                              </div>
-                          </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 mb-1">Réf d'envoi</label>
+                                        <input value={newTransmittalRef} onChange={e => setNewTransmittalRef(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white" placeholder="B-00X" />
+                                    </div>
+                                </div>
+                                {/* File List Transmittal */}
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 mb-1">Pièces Jointes (B.E)</label>
+                                    {newTransmittalFiles.map((file, idx) => (
+                                        <div key={idx} className="flex items-center gap-2 text-xs bg-white border p-1 rounded mb-1">
+                                            <span className="truncate flex-1">Fichier {idx + 1}</span>
+                                            <button type="button" onClick={() => setAttachmentToDelete({ type: 'transmittal', index: idx })} className="text-red-500"><X size={12}/></button>
+                                        </div>
+                                    ))}
+                                    {newTransmittalFiles.length < 3 && (
+                                      <div className="relative mt-2">
+                                          <input type="file" id="transmittal-upload" className="hidden" onChange={(e) => handleModalFileChange(e, 'transmittal')} />
+                                          <label htmlFor="transmittal-upload" className="flex items-center justify-center gap-2 w-full p-2 border-2 border-dashed border-gray-300 rounded text-gray-500 hover:border-blue-500 hover:text-blue-500 cursor-pointer text-xs bg-white">
+                                              <UploadCloud size={14} /> Ajouter Fichier
+                                          </label>
+                                      </div>
+                                    )}
+                                </div>
+                            </div>
 
-                          {/* Observation / Response Info */}
-                          <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm space-y-4">
-                              <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-2">Réponse / Validation</h4>
-                              <div>
-                                  <label className="block text-xs font-semibold text-gray-500 mb-1">Statut</label>
-                                  <select value={newStatus} onChange={e => setNewStatus(e.target.value as ApprovalStatus)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none font-medium bg-white">
-                                      <option value={ApprovalStatus.APPROVED}>Approuvé</option>
-                                      <option value={ApprovalStatus.REJECTED}>Non Approuvé</option>
-                                      <option value={ApprovalStatus.NO_RESPONSE}>Sans réponse</option>
-                                      <option value={ApprovalStatus.PENDING}>En cours de révision</option>
-                                  </select>
-                              </div>
-                              <div className="grid grid-cols-2 gap-4">
-                                  <div>
-                                      <label className="block text-xs font-semibold text-gray-500 mb-1">Date</label>
-                                      <input type="date" value={newObservationDate} onChange={e => setNewObservationDate(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none bg-white" />
-                                  </div>
-                                  <div>
-                                      <label className="block text-xs font-semibold text-gray-500 mb-1">Réf</label>
-                                      <input value={newObservationRef} onChange={e => setNewObservationRef(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none bg-white" placeholder="OBS-..." />
-                                  </div>
-                              </div>
-                              <div className="grid grid-cols-2 gap-4 mt-2">
-                                  <div>
-                                      <label className="block text-[10px] font-bold text-blue-600 uppercase mb-1">Date d'envoi Approbation</label>
-                                      <input type="date" value={newApprovedSendDate} onChange={e => setNewApprovedSendDate(e.target.value)} className="w-full p-2 border border-blue-100 rounded focus:ring-2 focus:ring-blue-500 outline-none bg-blue-50/30 text-xs" />
-                                  </div>
-                                  <div>
-                                      <label className="block text-[10px] font-bold text-green-600 uppercase mb-1">Date de retour Approbation</label>
-                                      <input type="date" value={newApprovedReturnDate} onChange={e => setNewApprovedReturnDate(e.target.value)} className="w-full p-2 border border-green-100 rounded focus:ring-2 focus:ring-green-500 outline-none bg-green-50/30 text-xs" />
-                                  </div>
-                              </div>
-                              {/* File List Obs */}
-                              <div>
-                                  <label className="block text-xs font-semibold text-gray-500 mb-1">Fichiers Annotés (Visa)</label>
-                                  {newObservationFiles.map((file, idx) => (
-                                      <div key={idx} className="flex items-center gap-2 text-xs bg-white border p-1 rounded mb-1">
-                                          <span className="truncate flex-1">Note {idx + 1}</span>
-                                          <button type="button" onClick={() => setAttachmentToDelete({ type: 'observation', index: idx })} className="text-red-500"><X size={12}/></button>
-                                      </div>
-                                  ))}
-                                  {newObservationFiles.length < 3 && (
-                                    <div className="relative mt-2">
-                                        <input type="file" id="obs-upload" className="hidden" onChange={(e) => handleModalFileChange(e, 'observation')} />
-                                        <label htmlFor="obs-upload" className="flex items-center justify-center gap-2 w-full p-2 border-2 border-dashed border-gray-300 rounded text-gray-500 hover:border-amber-500 hover:text-amber-500 cursor-pointer text-xs bg-white">
-                                            <UploadCloud size={14} /> Ajouter Note/Visa
-                                        </label>
+                            {/* Observation / Response Info */}
+                            <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm space-y-4">
+                                <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-2">Réponse / Validation</h4>
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 mb-1">Statut</label>
+                                    <select value={newStatus} onChange={e => setNewStatus(e.target.value as ApprovalStatus)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none font-medium bg-white">
+                                        <option value={ApprovalStatus.APPROVED}>Approuvé</option>
+                                        <option value={ApprovalStatus.REJECTED}>Non Approuvé</option>
+                                        <option value={ApprovalStatus.NO_RESPONSE}>Sans réponse</option>
+                                        <option value={ApprovalStatus.PENDING}>En cours de révision</option>
+                                    </select>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 mb-1">Date</label>
+                                        <input type="date" value={newObservationDate} onChange={e => setNewObservationDate(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none bg-white" />
                                     </div>
-                                  )}
-                              </div>
-                          </div>
-                      </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 mb-1">Réf</label>
+                                        <input value={newObservationRef} onChange={e => setNewObservationRef(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none bg-white" placeholder="OBS-..." />
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4 mt-2">
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-blue-600 uppercase mb-1">Date envoi App.</label>
+                                        <input type="date" value={newApprovedSendDate} onChange={e => setNewApprovedSendDate(e.target.value)} className="w-full p-2 border border-blue-100 rounded focus:ring-2 focus:ring-blue-500 outline-none bg-blue-50/30 text-xs" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-blue-600 uppercase mb-1">Réf envoi App.</label>
+                                        <input value={newApprovedSendRef} onChange={e => setNewApprovedSendRef(e.target.value)} className="w-full p-2 border border-blue-100 rounded focus:ring-2 focus:ring-blue-500 outline-none bg-blue-50/30 text-xs" placeholder="Réf..." />
+                                    </div>
+                                </div>
+                                <div className="mt-2">
+                                    <label className="block text-xs font-semibold text-gray-500 mb-1">Pièces Jointes (Envoi App.)</label>
+                                    {newApprovedSendFiles.map((file, idx) => (
+                                        <div key={idx} className="flex items-center gap-2 text-xs bg-white border p-1 rounded mb-1">
+                                            <span className="truncate flex-1">Fichier {idx + 1}</span>
+                                            <button type="button" onClick={() => setAttachmentToDelete({ type: 'approval', index: idx })} className="text-red-500"><X size={12}/></button>
+                                        </div>
+                                    ))}
+                                    {newApprovedSendFiles.length < 3 && (
+                                      <div className="relative mt-2">
+                                          <input type="file" id="approval-upload" className="hidden" onChange={(e) => handleModalFileChange(e, 'approval')} />
+                                          <label htmlFor="approval-upload" className="flex items-center justify-center gap-2 w-full p-2 border-2 border-dashed border-gray-300 rounded text-gray-500 hover:border-blue-500 hover:text-blue-500 cursor-pointer text-xs bg-white">
+                                              <UploadCloud size={14} /> Ajouter Fichier Approuvé
+                                          </label>
+                                      </div>
+                                    )}
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] font-bold text-green-600 uppercase mb-1">Date de retour Approbation</label>
+                                    <input type="date" value={newApprovedReturnDate} onChange={e => setNewApprovedReturnDate(e.target.value)} className="w-full p-2 border border-green-100 rounded focus:ring-2 focus:ring-green-500 outline-none bg-green-50/30 text-xs" />
+                                </div>
+                                {/* File List Obs */}
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 mb-1">Fichiers Annotés (Visa)</label>
+                                    {newObservationFiles.map((file, idx) => (
+                                        <div key={idx} className="flex items-center gap-2 text-xs bg-white border p-1 rounded mb-1">
+                                            <span className="truncate flex-1">Note {idx + 1}</span>
+                                            <button type="button" onClick={() => setAttachmentToDelete({ type: 'observation', index: idx })} className="text-red-500"><X size={12}/></button>
+                                        </div>
+                                    ))}
+                                    {newObservationFiles.length < 3 && (
+                                      <div className="relative mt-2">
+                                          <input type="file" id="obs-upload" className="hidden" onChange={(e) => handleModalFileChange(e, 'observation')} />
+                                          <label htmlFor="obs-upload" className="flex items-center justify-center gap-2 w-full p-2 border-2 border-dashed border-gray-300 rounded text-gray-500 hover:border-amber-500 hover:text-amber-500 cursor-pointer text-xs bg-white">
+                                              <UploadCloud size={14} /> Ajouter Note/Visa
+                                          </label>
+                                      </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                      )}
 
                       <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
                           <button type="button" onClick={closeAllModals} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg font-medium">Annuler</button>
@@ -1707,6 +1903,27 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                                       value={editSendForm.observationDate || ''} 
                                       onChange={e => setEditSendForm({...editSendForm, observationDate: e.target.value})}
                                       className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-medium" 
+                                  />
+                              </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                  <label className="block text-[10px] font-bold uppercase text-blue-600 mb-1">Réf. Envoi App.</label>
+                                  <input 
+                                      type="text" 
+                                      value={editSendForm.approvalRef || ''} 
+                                      onChange={e => setEditSendForm({...editSendForm, approvalRef: e.target.value})}
+                                      className="w-full p-2.5 bg-blue-50/30 border border-blue-100 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-medium" 
+                                  />
+                              </div>
+                              <div>
+                                  <label className="block text-[10px] font-bold uppercase text-blue-600 mb-1">Date Envoi App.</label>
+                                  <input 
+                                      type="date" 
+                                      value={editSendForm.approvalDate || ''} 
+                                      onChange={e => setEditSendForm({...editSendForm, approvalDate: e.target.value})}
+                                      className="w-full p-2.5 bg-blue-50/30 border border-blue-100 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-medium" 
                                   />
                               </div>
                           </div>

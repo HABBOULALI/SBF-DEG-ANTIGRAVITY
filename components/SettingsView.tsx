@@ -21,8 +21,8 @@ interface AppSettings {
     address: string;
     contact: string;
     defaultValidator: string;
-    logo: string;
     logoMDO?: string;
+    documentNatures: string[];
     stakeholders: {
         client: Stakeholder;
         consultant: Stakeholder;
@@ -52,12 +52,15 @@ export const SettingsView: React.FC = () => {
     defaultValidator: 'Bureau de Contrôle',
     logo: '',
     logoMDO: '',
+    documentNatures: ['Plans', 'Notes de calcul', 'Fiches Techniques', 'Documents Administratifs'],
     stakeholders: {
         client: { name: 'Maître d\'Ouvrage', contacts: ['M. Le Directeur Technique'] },
         consultant: { name: 'Bureau d\'Études Structure', contacts: ['M. L\'Ingénieur Conseil'] },
         control: { name: 'Bureau de Contrôle', contacts: ['M. Le Contrôleur Technique'] }
     }
   });
+
+  const [newType, setNewType] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [users, setUsers] = useState<UserData[]>([]);
@@ -83,7 +86,14 @@ export const SettingsView: React.FC = () => {
         // For simplicity, we use one doc 'app_settings'
         const unsubscribe = onSnapshot(doc(db, 'config', 'app_settings'), (doc) => {
             if (doc.exists()) {
-                setSettings(doc.data() as AppSettings);
+                const data = doc.data() as AppSettings;
+                if (!data.documentNatures && (data as any).documentTypes) {
+                    data.documentNatures = (data as any).documentTypes;
+                }
+                if (!data.documentNatures) {
+                    data.documentNatures = ['Plans', 'Notes de calcul', 'Fiches Techniques', 'Documents Administratifs'];
+                }
+                setSettings(data);
             } else {
                 // If not in Firestore, try local as backup
                 const saved = localStorage.getItem('btp-app-settings');
@@ -121,6 +131,7 @@ export const SettingsView: React.FC = () => {
     try {
         await setDoc(doc(db, 'config', 'app_settings'), settings);
         localStorage.setItem('btp-app-settings', JSON.stringify(settings));
+        window.dispatchEvent(new Event('btp-app-settings-updated'));
         toast.success("Paramètres enregistrés dans le cloud !");
     } catch (e) {
         console.error(e);
@@ -310,6 +321,59 @@ export const SettingsView: React.FC = () => {
                 <div className="space-y-3">
                     <input name="projectName" value={settings.projectName} onChange={handleChange} className="w-full p-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-[13px] transition-colors" placeholder="Projet" />
                     <input name="projectCode" value={settings.projectCode} onChange={handleChange} className="w-full p-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-[13px] transition-colors" placeholder="Code Projet" />
+                </div>
+            </div>
+        </div>
+
+        <div className="space-y-4">
+            <h3 className="text-base font-semibold border-b dark:border-slate-800 pb-2 text-gray-700 dark:text-slate-300 transition-colors flex items-center gap-2">
+                <FileText size={18} className="text-blue-500" /> Gestion des Natures de Documents
+            </h3>
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 transition-colors space-y-4">
+                <p className="text-xs text-gray-500">Ces natures seront disponibles dans la liste déroulante du suivi des documents.</p>
+                <div className="flex flex-wrap gap-2">
+                    {settings.documentNatures.map((nature, idx) => (
+                        <div key={idx} className="flex items-center gap-2 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 px-3 py-1.5 rounded-lg border border-blue-100 dark:border-blue-900/30 text-[13px] font-medium group">
+                            {nature}
+                            <button 
+                                onClick={() => setSettings({...settings, documentNatures: settings.documentNatures.filter((_, i) => i !== idx)})}
+                                className="text-blue-400 hover:text-red-500 transition-colors"
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+                <div className="flex gap-2 max-w-sm mt-4">
+                    <input 
+                        type="text" 
+                        value={newType}
+                        onChange={(e) => setNewType(e.target.value)}
+                        placeholder="Nouvelle nature (ex: Rapport Géo)"
+                        className="flex-1 p-2 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-[13px] outline-none focus:ring-2 focus:ring-blue-500"
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && newType.trim()) {
+                                e.preventDefault();
+                                if (!settings.documentNatures.includes(newType.trim())) {
+                                    setSettings({...settings, documentNatures: [...settings.documentNatures, newType.trim()]});
+                                }
+                                setNewType('');
+                            }
+                        }}
+                    />
+                    <button 
+                        onClick={() => {
+                            if (newType.trim()) {
+                                if (!settings.documentNatures.includes(newType.trim())) {
+                                    setSettings({...settings, documentNatures: [...settings.documentNatures, newType.trim()]});
+                                }
+                                setNewType('');
+                            }
+                        }}
+                        className="bg-blue-600 text-white px-3 rounded-lg hover:bg-blue-700 transition-colors"
+                    >
+                        <Plus size={18} />
+                    </button>
                 </div>
             </div>
         </div>

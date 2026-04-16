@@ -119,6 +119,7 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
     companySubtitle: 'Entreprise Générale de Bâtiments et de Travaux Publics',
     address: '41 Rue 8600 ZI La Charguia 1. Tunis',
     contact: 'Tél. : 70 557 900 - Fax : 70 557 999',
+    typeBE: 'avis' as 'avis' | 'visa',
   });
 
   const [docObs, setDocObs] = useState<Record<string, string>>({});
@@ -383,6 +384,7 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
           project: formData.project,
           documentCount: currentSelection.length,
           timestamp: Date.now(),
+          typeBE: formData.typeBE,
           formDataSnapshot: { ...formData },
           observations: { ...docObs },
           copies: { ...docCopies },
@@ -418,8 +420,10 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
                   const newSendRecord: SendRecord = {
                       id: crypto.randomUUID(),
                       recipientName: newRecipient,
-                      transmittalRef: formData.refBE,
-                      transmittalDate: formData.date,
+                      transmittalRef: formData.typeBE === 'avis' ? formData.refBE : undefined,
+                      transmittalDate: formData.typeBE === 'avis' ? formData.date : undefined,
+                      approvalRef: formData.typeBE === 'visa' ? formData.refBE : undefined,
+                      approvalDate: formData.typeBE === 'visa' ? formData.date : undefined,
                       status: ApprovalStatus.PENDING, // Nouveau envoi = En attente
                   };
 
@@ -438,8 +442,10 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
                       sendHistory: updatedSendHistory,
                       recipients: existingRecipients,
                       recipient: existingRecipients.join(', '),
-                      transmittalDate: formData.date || rev.transmittalDate,
-                      transmittalRef: formData.refBE || rev.transmittalRef,
+                      transmittalDate: formData.typeBE === 'avis' ? (formData.date || rev.transmittalDate) : rev.transmittalDate,
+                      transmittalRef: formData.typeBE === 'avis' ? (formData.refBE || rev.transmittalRef) : rev.transmittalRef,
+                      approvedSendDate: formData.typeBE === 'visa' ? formData.date : rev.approvedSendDate,
+                      approvedSendRef: formData.typeBE === 'visa' ? formData.refBE : rev.approvedSendRef,
                   };
               }
               return rev;
@@ -1124,7 +1130,26 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
                <h3 className="text-[11px] font-bold text-amber-600 dark:text-amber-500 mb-5 flex items-center gap-2 uppercase tracking-wide border-b border-gray-100 dark:border-slate-800 pb-3">
                    <Settings2 size={18} className="text-amber-500" /> Détails Envoi
                </h3>
-               <div className="grid grid-cols-2 gap-5 mb-4">
+                <div className="mb-4">
+                    <label className="block text-[11px] font-semibold text-gray-500 dark:text-slate-400 mb-2 uppercase tracking-wide">Type d'Envoi</label>
+                    <div className="grid grid-cols-2 gap-2 p-1 bg-gray-100 dark:bg-slate-800 rounded-lg">
+                        <button 
+                            type="button"
+                            onClick={() => setFormData({...formData, typeBE: 'avis'})}
+                            className={`py-1.5 text-[11px] font-bold rounded-md transition-all ${formData.typeBE === 'avis' ? 'bg-amber-600 text-white shadow-sm' : 'text-gray-500 hover:bg-gray-200 dark:hover:bg-slate-700'}`}
+                        >
+                            POUR AVIS
+                        </button>
+                        <button 
+                            type="button"
+                            onClick={() => setFormData({...formData, typeBE: 'visa'})}
+                            className={`py-1.5 text-[11px] font-bold rounded-md transition-all ${formData.typeBE === 'visa' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:bg-gray-200 dark:hover:bg-slate-700'}`}
+                        >
+                            POUR VISA
+                        </button>
+                    </div>
+                </div>
+                <div className="grid grid-cols-2 gap-5 mb-4">
                     <div>
                         <label className="block text-[11px] font-semibold text-gray-500 dark:text-slate-400 mb-2 uppercase tracking-wide">Date d'Envoi</label>
                         <input 

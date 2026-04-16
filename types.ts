@@ -22,9 +22,11 @@ export interface SendRecord {
   observationDate?: string;
   observationRef?: string;
   approvalDate?: string;
+  approvalRef?: string;
   returnDate?: string;
   transmittalFiles?: string[];
   observationFiles?: string[];
+  approvalFiles?: string[];
 }
 
 export interface Revision {
@@ -39,6 +41,8 @@ export interface Revision {
   approvalDate?: string;
   returnDate?: string;
   approvedSendDate?: string;
+  approvedSendRef?: string;
+  approvedSendFiles?: string[];
   approvedReturnDate?: string;
   status: ApprovalStatus;
   comments?: string;
@@ -55,6 +59,7 @@ export interface BTPDocument {
   poste: string; // e.g., "GC"
   code: string; // e.g., "GC-FND-Z1-001"
   name: string;
+  nature?: string; // New: Nature of document (Configurable)
   revisions: Revision[];
   currentRevisionIndex: number;
 }

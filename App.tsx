@@ -19,6 +19,7 @@ const INITIAL_DOCS: BTPDocument[] = [
     poste: 'GC',
     code: 'GC-FND-Z1-001',
     name: 'Plan de fondation - Zone Nord',
+    nature: 'Plans',
     currentRevisionIndex: 0,
     revisions: [
       { 
@@ -43,6 +44,7 @@ const INITIAL_DOCS: BTPDocument[] = [
     poste: 'ELEC',
     code: 'EL-SCH-GEN-001',
     name: 'Schéma unifilaire général',
+    nature: 'Schémas',
     currentRevisionIndex: 0,
     revisions: [
       { 
@@ -65,6 +67,7 @@ const INITIAL_DOCS: BTPDocument[] = [
     poste: 'GC',
     code: 'GC-COU-MV-004',
     name: 'Coupe de principe Mur Voile',
+    nature: 'Plans',
     currentRevisionIndex: 0,
     revisions: [
       { 
