@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
+import { storageService } from '../services/storageService';
 
 interface DocumentListProps {
   documents: BTPDocument[];
@@ -24,6 +25,15 @@ interface FlatRow {
     doc: BTPDocument;
     rev: Revision;
     isLatest: boolean;
+}
+
+type AttachmentType = 'transmittal' | 'observation' | 'approval';
+
+interface UploadTarget {
+    docId: string;
+    revId: string;
+    type: AttachmentType;
+    sendId?: string;
 }
 
 // Helper to get next revision index (Numeric 00->01, or Alphabetic A->B)
@@ -54,7 +64,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
   const canModify = isAdmin || isEditor;
   const canDelete = isAdmin;
 
-  const [filter, setFilter] = useState<ApprovalStatus | 'ALL'>(initialFilter || 'ALL');
+  const [filter, setFilter] = useState<string>(initialFilter || 'ALL');
   const [natureFilter, setNatureFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState(''); // State pour la recherche textuelle
   const [isListening, setIsListening] = useState(false); // State pour le micro
@@ -65,7 +75,8 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
   
   // File Upload State
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [uploadTarget, setUploadTarget] = useState<{docId: string, revId: string, type: 'transmittal' | 'observation', sendId?: string} | null>(null);
+  const [uploadTarget, setUploadTarget] = useState<UploadTarget | null>(null);
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
 
   // Edit Send Modal State
   const [editSendModal, setEditSendModal] = useState<{docId: string, revIdx: number, sendIdx: number} | null>(null);
@@ -74,7 +85,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
   // Confirmation Modals State
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   // attachmentToDelete is now object to track index
-  const [attachmentToDelete, setAttachmentToDelete] = useState<{ type: 'transmittal' | 'observation', index: number } | null>(null);
+  const [attachmentToDelete, setAttachmentToDelete] = useState<{ type: 'transmittal' | 'observation' | 'approval', index: number } | null>(null);
   
   // Edit Mode State
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
@@ -213,7 +224,21 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
   const filteredRows = useMemo(() => {
     return allRows.filter(({ rev, doc }) => {
         // Filtre Statut
-        const matchStatus = filter === 'ALL' || rev.status === filter;
+        // Filtre Statut (Groupé)
+        let matchStatus = true;
+        if (filter !== 'ALL') {
+            if (filter === 'APPROVED_GROUP') {
+                matchStatus = rev.status === ApprovalStatus.APPROVED || rev.status === ApprovalStatus.APPROVED_WITH_COMMENTS;
+            } else if (filter === 'REJECTED') {
+                matchStatus = rev.status === ApprovalStatus.REJECTED;
+            } else if (filter === 'PENDING') {
+                matchStatus = rev.status === ApprovalStatus.PENDING;
+            } else if (filter === 'NO_RESPONSE') {
+                matchStatus = rev.status === ApprovalStatus.NO_RESPONSE;
+            } else {
+                matchStatus = rev.status === filter;
+            }
+        }
         
         // Filtre Nature
         const matchNature = natureFilter === 'ALL' || doc.nature === natureFilter;
@@ -390,113 +415,198 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
       }
   };
 
+  const getAttachmentFolderName = (type: AttachmentType) => {
+      switch (type) {
+          case 'transmittal': return 'transmittals';
+          case 'observation': return 'observations';
+          case 'approval': return 'approvals';
+          default: return 'files';
+      }
+  };
+
+  const buildAttachmentBasePath = (docId: string, revId: string, type: AttachmentType) =>
+      storageService.buildPath('documents', docId, 'revisions', revId, getAttachmentFolderName(type));
+
+  const persistAttachmentList = async (
+      files: string[],
+      docId: string,
+      revId: string,
+      type: AttachmentType
+  ) => {
+      const basePath = buildAttachmentBasePath(docId, revId, type);
+      const persistedFiles: string[] = [];
+
+      for (const [index, fileEntry] of files.entries()) {
+          if (!fileEntry) continue;
+
+          if (storageService.isRemoteFileUrl(fileEntry)) {
+              persistedFiles.push(fileEntry);
+              continue;
+          }
+
+          if (!storageService.isDataUrl(fileEntry)) {
+              continue;
+          }
+
+          const uploadResult = await storageService.uploadDataUrl(
+              basePath,
+              fileEntry,
+              `${type}_${Date.now()}_${index + 1}`
+          );
+          persistedFiles.push(uploadResult.downloadURL);
+      }
+
+      return persistedFiles;
+  };
+
   const confirmAttachmentDelete = () => {
       if (!attachmentToDelete) return;
 
       if (attachmentToDelete.type === 'transmittal') {
-          setNewTransmittalFiles(prev => prev.filter((_, i) => i !== attachmentToDelete.index));
+          setNewTransmittalFiles(prev => {
+              const target = prev[attachmentToDelete.index];
+              void storageService.deleteByUrl(target);
+              return prev.filter((_, i) => i !== attachmentToDelete.index);
+          });
       } else if (attachmentToDelete.type === 'observation') {
-          setNewObservationFiles(prev => prev.filter((_, i) => i !== attachmentToDelete.index));
+          setNewObservationFiles(prev => {
+              const target = prev[attachmentToDelete.index];
+              void storageService.deleteByUrl(target);
+              return prev.filter((_, i) => i !== attachmentToDelete.index);
+          });
       } else if (attachmentToDelete.type === 'approval') {
-          setNewApprovedSendFiles(prev => prev.filter((_, i) => i !== attachmentToDelete.index));
+          setNewApprovedSendFiles(prev => {
+              const target = prev[attachmentToDelete.index];
+              void storageService.deleteByUrl(target);
+              return prev.filter((_, i) => i !== attachmentToDelete.index);
+          });
       }
       setAttachmentToDelete(null);
   };
 
-  const handleFormSubmit = (e: React.FormEvent) => {
+  const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     let docToSave: BTPDocument | null = null;
 
-    if (editingDocId && editingRevId) {
-        const docToUpdate = documents.find(d => d.id === editingDocId);
-        if (!docToUpdate) return;
-        const updatedDoc: BTPDocument = { ...docToUpdate };
-        updatedDoc.lot = newLot;
-        updatedDoc.classement = newCl;
-        updatedDoc.nature = newNature;
-        updatedDoc.poste = newPoste;
-        updatedDoc.code = newCode;
-        updatedDoc.name = newName;
-        let updatedRevs = [...updatedDoc.revisions];
-        const targetRevIdx = updatedRevs.findIndex(r => r.id === editingRevId);
-        if (targetRevIdx === -1) return;
-        updatedRevs[targetRevIdx] = {
-            ...updatedRevs[targetRevIdx],
-            index: newIndex,
-            transmittalDate: newTransmittalDate,
-            transmittalRef: newTransmittalRef,
-            transmittalFiles: newTransmittalFiles,
-            observationDate: newObservationDate,
-            observationRef: newObservationRef,
-            observationFiles: newObservationFiles,
-            approvedSendDate: newApprovedSendDate,
-            approvedSendRef: newApprovedSendRef,
-            approvedSendFiles: newApprovedSendFiles,
-            approvedReturnDate: newApprovedReturnDate,
-            status: newStatus 
-        };
-        if (
-             newStatus === ApprovalStatus.APPROVED || 
-             newStatus === ApprovalStatus.APPROVED_WITH_COMMENTS ||
-             newStatus === ApprovalStatus.PENDING ||
-             newStatus === ApprovalStatus.NO_RESPONSE
-        ) {
-             updatedRevs = updatedRevs.slice(0, targetRevIdx + 1);
-             updatedDoc.currentRevisionIndex = targetRevIdx;
-        }
-        else if (newStatus === ApprovalStatus.REJECTED) {
-             const nextIndex = getNextIndex(newIndex);
-             const newRev: Revision = {
-               id: crypto.randomUUID(),
-               index: nextIndex,
-               transmittalRef: '', 
-               transmittalDate: '', 
-               status: ApprovalStatus.PENDING,
-               observationDate: undefined,
-               observationRef: undefined,
-               transmittalFiles: [],
-               observationFiles: []
-             };
-             updatedRevs.push(newRev);
-             updatedDoc.currentRevisionIndex = updatedRevs.length - 1;
-        }
-        updatedDoc.revisions = updatedRevs;
-        docToSave = updatedDoc;
-    } else {
-        const finalRef = newTransmittalRef || `B-${String(documents.length + 1).padStart(3, '0')}`;
-        docToSave = {
-            id: crypto.randomUUID(),
-            lot: newLot,
-            classement: newCl,
-            nature: newNature,
-            poste: newPoste,
-            code: newCode,
-            name: newName,
-            currentRevisionIndex: 0,
-            revisions: [
-                {
-                id: crypto.randomUUID(),
+    try {
+        setIsUploadingFile(true);
+
+        if (editingDocId && editingRevId) {
+            const docToUpdate = documents.find(d => d.id === editingDocId);
+            if (!docToUpdate) return;
+
+            const updatedDoc: BTPDocument = { ...docToUpdate };
+            updatedDoc.lot = newLot;
+            updatedDoc.classement = newCl;
+            updatedDoc.nature = newNature;
+            updatedDoc.poste = newPoste;
+            updatedDoc.code = newCode;
+            updatedDoc.name = newName;
+
+            let updatedRevs = [...updatedDoc.revisions];
+            const targetRevIdx = updatedRevs.findIndex(r => r.id === editingRevId);
+            if (targetRevIdx === -1) return;
+
+            const persistedTransmittalFiles = await persistAttachmentList(newTransmittalFiles, editingDocId, editingRevId, 'transmittal');
+            const persistedObservationFiles = await persistAttachmentList(newObservationFiles, editingDocId, editingRevId, 'observation');
+            const persistedApprovalFiles = await persistAttachmentList(newApprovedSendFiles, editingDocId, editingRevId, 'approval');
+
+            updatedRevs[targetRevIdx] = {
+                ...updatedRevs[targetRevIdx],
                 index: newIndex,
-                transmittalRef: finalRef,
                 transmittalDate: newTransmittalDate,
-                transmittalFiles: newTransmittalFiles,
+                transmittalRef: newTransmittalRef,
+                transmittalFiles: persistedTransmittalFiles,
+                observationDate: newObservationDate,
+                observationRef: newObservationRef,
+                observationFiles: persistedObservationFiles,
                 approvedSendDate: newApprovedSendDate,
                 approvedSendRef: newApprovedSendRef,
-                approvedSendFiles: newApprovedSendFiles,
+                approvedSendFiles: persistedApprovalFiles,
                 approvedReturnDate: newApprovedReturnDate,
-                status: newStatus,
-                observationFiles: []
-                }
-            ]
-        };
+                status: newStatus
+            };
+
+            if (
+                newStatus === ApprovalStatus.APPROVED ||
+                newStatus === ApprovalStatus.APPROVED_WITH_COMMENTS ||
+                newStatus === ApprovalStatus.PENDING ||
+                newStatus === ApprovalStatus.NO_RESPONSE
+            ) {
+                updatedRevs = updatedRevs.slice(0, targetRevIdx + 1);
+                updatedDoc.currentRevisionIndex = targetRevIdx;
+            } else if (newStatus === ApprovalStatus.REJECTED) {
+                const nextIndex = getNextIndex(newIndex);
+                const newRev: Revision = {
+                    id: crypto.randomUUID(),
+                    index: nextIndex,
+                    transmittalRef: '',
+                    transmittalDate: '',
+                    status: ApprovalStatus.PENDING,
+                    observationDate: undefined,
+                    observationRef: undefined,
+                    transmittalFiles: [],
+                    observationFiles: []
+                };
+                updatedRevs.push(newRev);
+                updatedDoc.currentRevisionIndex = updatedRevs.length - 1;
+            }
+
+            updatedDoc.revisions = updatedRevs;
+            docToSave = updatedDoc;
+        } else {
+            const docId = crypto.randomUUID();
+            const revId = crypto.randomUUID();
+            const finalRef = newTransmittalRef || `B-${String(documents.length + 1).padStart(3, '0')}`;
+
+            const persistedTransmittalFiles = await persistAttachmentList(newTransmittalFiles, docId, revId, 'transmittal');
+            const persistedObservationFiles = await persistAttachmentList(newObservationFiles, docId, revId, 'observation');
+            const persistedApprovalFiles = await persistAttachmentList(newApprovedSendFiles, docId, revId, 'approval');
+
+            docToSave = {
+                id: docId,
+                lot: newLot,
+                classement: newCl,
+                nature: newNature,
+                poste: newPoste,
+                code: newCode,
+                name: newName,
+                currentRevisionIndex: 0,
+                revisions: [
+                    {
+                        id: revId,
+                        index: newIndex,
+                        transmittalRef: finalRef,
+                        transmittalDate: newTransmittalDate,
+                        transmittalFiles: persistedTransmittalFiles,
+                        observationDate: newObservationDate,
+                        observationRef: newObservationRef,
+                        observationFiles: persistedObservationFiles,
+                        approvedSendDate: newApprovedSendDate,
+                        approvedSendRef: newApprovedSendRef,
+                        approvedSendFiles: persistedApprovalFiles,
+                        approvedReturnDate: newApprovedReturnDate,
+                        status: newStatus
+                    }
+                ]
+            };
+        }
+
+        if (!docToSave) return;
+
+        if (editingDocId) {
+            await onUpdateDocument(docToSave);
+        } else {
+            await onAddDocument(docToSave);
+        }
+
+        closeAllModals();
+    } catch (error) {
+        console.error('File persistence error:', error);
+        alert("Erreur lors de l'enregistrement des fichiers dans le cloud.");
+    } finally {
+        setIsUploadingFile(false);
     }
-    if (!docToSave) return;
-    if (editingDocId) {
-        onUpdateDocument(docToSave);
-    } else {
-        onAddDocument(docToSave);
-    }
-    closeAllModals();
   };
 
   const closeAllModals = () => {
@@ -534,7 +644,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
       setReminderModal(null);
   };
 
-  const triggerFileUpload = (docId: string, revId: string, type: 'transmittal' | 'observation' | 'approval', sendId?: string) => {
+  const triggerFileUpload = (docId: string, revId: string, type: AttachmentType, sendId?: string) => {
       setUploadTarget({ docId, revId, type, sendId });
       setTimeout(() => {
           fileInputRef.current?.click();
@@ -622,6 +732,89 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
           if (fileInputRef.current) fileInputRef.current.value = '';
       };
       reader.readAsDataURL(file);
+  };
+
+  const handleCloudFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file || !uploadTarget) return;
+
+      try {
+          setIsUploadingFile(true);
+
+          const doc = documents.find(d => d.id === uploadTarget.docId);
+          if (!doc) return;
+
+          const updatedDoc = { ...doc };
+          const revIdx = updatedDoc.revisions.findIndex(r => r.id === uploadTarget.revId);
+          if (revIdx === -1) return;
+
+          const rev = updatedDoc.revisions[revIdx];
+          const fileBasePath = buildAttachmentBasePath(uploadTarget.docId, uploadTarget.revId, uploadTarget.type);
+          const uploadResult = await storageService.uploadFile(
+              `${fileBasePath}/${storageService.buildPath(`${Date.now()}_${file.name}`)}`,
+              file,
+              { contentType: file.type || 'application/octet-stream' }
+          );
+
+          if (uploadTarget.sendId && rev.sendHistory) {
+              const sendIdx = rev.sendHistory.findIndex(s => s.id === uploadTarget.sendId);
+              if (sendIdx === -1) return;
+
+              const send = rev.sendHistory[sendIdx];
+              if (uploadTarget.type === 'transmittal') {
+                  const currentFiles = send.transmittalFiles || [];
+                  if (currentFiles.length >= 3) {
+                      alert("Maximum 3 bordereaux autorisés par envoi.");
+                      return;
+                  }
+                  send.transmittalFiles = [...currentFiles, uploadResult.downloadURL];
+              } else if (uploadTarget.type === 'observation') {
+                  const currentFiles = send.observationFiles || [];
+                  if (currentFiles.length >= 3) {
+                      alert("Maximum 3 notes autorisées par envoi.");
+                      return;
+                  }
+                  send.observationFiles = [...currentFiles, uploadResult.downloadURL];
+              } else {
+                  const currentFiles = send.approvalFiles || [];
+                  if (currentFiles.length >= 3) {
+                      alert("Maximum 3 fichiers approuvés autorisés par envoi.");
+                      return;
+                  }
+                  send.approvalFiles = [...currentFiles, uploadResult.downloadURL];
+              }
+          } else if (uploadTarget.type === 'transmittal') {
+              const currentFiles = rev.transmittalFiles || [];
+              if (currentFiles.length >= 3) {
+                  alert("Maximum 3 bordereaux autorisés.");
+                  return;
+              }
+              rev.transmittalFiles = [...currentFiles, uploadResult.downloadURL];
+          } else if (uploadTarget.type === 'observation') {
+              const currentFiles = rev.observationFiles || [];
+              if (currentFiles.length >= 3) {
+                  alert("Maximum 3 notes d'observation autorisées.");
+                  return;
+              }
+              rev.observationFiles = [...currentFiles, uploadResult.downloadURL];
+          } else {
+              const currentFiles = rev.approvedSendFiles || [];
+              if (currentFiles.length >= 3) {
+                  alert("Maximum 3 fichiers approuvés autorisés.");
+                  return;
+              }
+              rev.approvedSendFiles = [...currentFiles, uploadResult.downloadURL];
+          }
+
+          await onUpdateDocument(updatedDoc);
+      } catch (error) {
+          console.error('Cloud upload error:', error);
+          alert("Erreur lors de l'upload du fichier vers Google Drive.");
+      } finally {
+          setUploadTarget(null);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          setIsUploadingFile(false);
+      }
   };
 
   const openEditSendModal = (docId: string, revIdx: number, sendIdx: number) => {
@@ -752,10 +945,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
   };
 
   const openFile = (fileUrl: string) => {
-      const win = window.open();
-      if(win) {
-          win.document.write(`<iframe src="${fileUrl}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
-      }
+      window.open(fileUrl, '_blank', 'noopener,noreferrer');
   };
 
   const getStatusText = (status: ApprovalStatus) => {
@@ -1069,10 +1259,9 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                       onChange={(e) => setFilter(e.target.value as any)}
                     >
                       <option value="ALL">Tous les statuts</option>
-                      <option value={ApprovalStatus.PENDING}>En cours</option>
-                      <option value={ApprovalStatus.APPROVED}>Approuvé</option>
-                      <option value={ApprovalStatus.APPROVED_WITH_COMMENTS}>Approuvé (R)</option>
-                      <option value={ApprovalStatus.REJECTED}>Rejeté</option>
+                      <option value="APPROVED_GROUP">Approuvé</option>
+                      <option value={ApprovalStatus.REJECTED}>Non Approuvé</option>
+                      <option value={ApprovalStatus.PENDING}>En cours de révision</option>
                       <option value={ApprovalStatus.NO_RESPONSE}>Sans réponse</option>
                     </select>
                     <Filter size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -1567,7 +1756,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
       </div>
       
       {/* Hidden File Input for Icon Clicks */}
-      <input type="file" ref={fileInputRef} className="hidden" accept=".pdf,.jpg,.png,.doc,.docx,.xls,.xlsx" onChange={handleFileChange} />
+      <input type="file" ref={fileInputRef} className="hidden" accept=".pdf,.jpg,.png,.doc,.docx,.xls,.xlsx" onChange={handleCloudFileChange} />
 
       {/* --- CREATE / EDIT MODAL --- */}
       {isModalOpen && (

@@ -4,6 +4,8 @@ import { Square, CheckSquare, Archive, History, Trash2, Eye, X, AlertTriangle, C
 import { Logo } from './Logo';
 import { Document, Packer, Paragraph, Table, TableRow, TableCell, WidthType, TextRun, ImageRun, BorderStyle, AlignmentType, VerticalAlign, Header } from 'docx';
 import { useAuth } from '../context/AuthContext';
+import { storageService } from '../services/storageService';
+import { firestoreService } from '../services/firestoreService';
 
 interface BordereauViewProps {
   documents: BTPDocument[];
@@ -40,6 +42,9 @@ interface SavedBordereau {
     copies: Record<string, number>;
     formDataSnapshot: any;
     timestamp: number;
+    typeBE?: 'avis' | 'visa';
+    pdfUrl?: string;
+    pdfStoragePath?: string;
 }
 
 const INTERNAL_DEPARTMENTS = [
@@ -101,6 +106,8 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
     consultant: Stakeholder;
     control: Stakeholder;
   } | null>(null);
+  const [dynamicRecipients, setDynamicRecipients] = useState<Stakeholder[]>([]);
+  const [dynamicSenders, setDynamicSenders] = useState<string[]>([]);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -127,17 +134,21 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
 
   // Derived state for available contacts based on selected recipient
   const availableContacts = React.useMemo(() => {
-      if (!stakeholders || !formData.to) return [];
+      if (!formData.to) return [];
       
-      // On cherche quel acteur correspond au nom sélectionné
-      if (stakeholders.client.name === formData.to) return stakeholders.client.contacts;
-      if (stakeholders.consultant.name === formData.to) return stakeholders.consultant.contacts;
-      if (stakeholders.control.name === formData.to) return stakeholders.control.contacts;
+      // 1. Check fixed stakeholders
+      if (stakeholders) {
+          if (stakeholders.client.name === formData.to) return stakeholders.client.contacts;
+          if (stakeholders.consultant.name === formData.to) return stakeholders.consultant.contacts;
+          if (stakeholders.control.name === formData.to) return stakeholders.control.contacts;
+      }
       
-      // Fallback
-      const st = (Object.values(stakeholders) as Stakeholder[]).find(s => s.name === formData.to);
-      return st ? st.contacts : [];
-  }, [stakeholders, formData.to]);
+      // 2. Check dynamic recipients
+      const foundDynamic = dynamicRecipients.find(r => r.name === formData.to);
+      if (foundDynamic) return foundDynamic.contacts;
+      
+      return [];
+  }, [stakeholders, dynamicRecipients, formData.to]);
 
   const loadSettings = () => {
     const savedSettings = localStorage.getItem('btp-app-settings');
@@ -152,20 +163,23 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
         };
 
         const loadedStakeholders = parsed.stakeholders || defaultStakeholders;
-
         setStakeholders(loadedStakeholders);
+        setDynamicRecipients(parsed.recipients || []);
+        setDynamicSenders(parsed.senders || []);
 
         setFormData(prev => ({
             ...prev,
             project: parsed.projectName || prev.project,
             // Si le destinataire actuel n'est pas dans la liste, on ne force pas le changement, sauf si vide
-            to: prev.to || loadedStakeholders.control?.name || '',
+            to: prev.to || (parsed.recipients && parsed.recipients.length > 0 ? parsed.recipients[0].name : (loadedStakeholders.control?.name || '')),
+            from: prev.from || (parsed.senders && parsed.senders.length > 0 ? parsed.senders[0] : prev.from),
             companyName: parsed.companyName || prev.companyName,
             companySubtitle: parsed.companySubtitle || prev.companySubtitle,
             address: parsed.address || prev.address,
             contact: parsed.contact || prev.contact
         }));
         if (parsed.logo) setLogo(parsed.logo);
+        (window as any).btpSettings = parsed; // Keep for backward compatibility if any JSX relies on it
     }
   };
 
@@ -471,10 +485,114 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
 
   const confirmDeleteBordereau = () => {
       if (!deleteConfirmId) return;
+      const targetArchive = history.find(h => h.id === deleteConfirmId);
+      if (targetArchive?.pdfUrl) {
+          void storageService.deleteByUrl(targetArchive.pdfUrl);
+      }
+      void firestoreService.deleteBordereauArchive(deleteConfirmId);
       const updatedHistory = history.filter(h => h.id !== deleteConfirmId);
       setHistory(updatedHistory);
       localStorage.setItem('btp-bordereau-history', JSON.stringify(updatedHistory));
       setDeleteConfirmId(null);
+  };
+
+  const handleArchiveBordereauCloud = async () => {
+      if (currentSelection.length === 0) {
+          alert("Veuillez sélectionner au moins un document avant d'enregistrer.");
+          return;
+      }
+
+      const newEntry: SavedBordereau = {
+          id: crypto.randomUUID(),
+          refBE: formData.refBE,
+          date: formData.date,
+          recipient: formData.to || 'Non spécifié',
+          project: formData.project,
+          documentCount: currentSelection.length,
+          timestamp: Date.now(),
+          typeBE: formData.typeBE,
+          formDataSnapshot: { ...formData },
+          observations: { ...docObs },
+          copies: { ...docCopies },
+          documents: currentSelection.map(d => {
+              const revIdx = (d.currentRevisionIndex !== undefined) ? d.currentRevisionIndex : d.revisions.length - 1;
+              const rev = d.revisions[revIdx];
+              return {
+                  id: d.id,
+                  code: d.code,
+                  name: d.name,
+                  index: rev ? rev.index : '00',
+                  lot: d.lot,
+                  poste: d.poste,
+                  classement: d.classement
+              };
+          })
+      };
+
+      currentSelection.forEach(doc => {
+          const revIdx = (doc.currentRevisionIndex !== undefined) ? doc.currentRevisionIndex : doc.revisions.length - 1;
+          const updatedRevisions = doc.revisions.map((rev, idx) => {
+              if (idx !== revIdx) return rev;
+
+              const newRecipient = formData.to?.trim() || 'Non spécifié';
+              const newSendRecord: SendRecord = {
+                  id: crypto.randomUUID(),
+                  recipientName: newRecipient,
+                  transmittalRef: formData.typeBE === 'avis' ? formData.refBE : undefined,
+                  transmittalDate: formData.typeBE === 'avis' ? formData.date : undefined,
+                  approvalRef: formData.typeBE === 'visa' ? formData.refBE : undefined,
+                  approvalDate: formData.typeBE === 'visa' ? formData.date : undefined,
+                  status: ApprovalStatus.PENDING,
+              };
+
+              const existingSendHistory = rev.sendHistory || [];
+              const updatedSendHistory = [...existingSendHistory, newSendRecord];
+              const existingRecipients: string[] = rev.recipients ? [...rev.recipients] : rev.recipient ? [rev.recipient] : [];
+              if (!existingRecipients.includes(newRecipient)) {
+                  existingRecipients.push(newRecipient);
+              }
+
+              return {
+                  ...rev,
+                  sendHistory: updatedSendHistory,
+                  recipients: existingRecipients,
+                  recipient: existingRecipients.join(', '),
+                  transmittalDate: formData.typeBE === 'avis' ? (formData.date || rev.transmittalDate) : rev.transmittalDate,
+                  transmittalRef: formData.typeBE === 'avis' ? (formData.refBE || rev.transmittalRef) : rev.transmittalRef,
+                  approvedSendDate: formData.typeBE === 'visa' ? formData.date : rev.approvedSendDate,
+                  approvedSendRef: formData.typeBE === 'visa' ? formData.refBE : rev.approvedSendRef,
+              };
+          });
+
+          const updatedDoc = { ...doc, revisions: updatedRevisions };
+          onUpdateDocument(updatedDoc);
+      });
+
+      try {
+          const pdfBlob = await generatePDFBlob('print-area', formData.refBE);
+          const safeFileName = `Bordereau_${formData.refBE.replace(/[^a-z0-9]/gi, '_')}.pdf`;
+          const storagePath = storageService.buildPath('bordereaux', formData.project || 'projet', formData.refBE, safeFileName);
+          const uploadResult = await storageService.uploadFile(storagePath, pdfBlob, { contentType: 'application/pdf' });
+
+          newEntry.pdfUrl = uploadResult.downloadURL;
+          newEntry.pdfStoragePath = uploadResult.path;
+
+          const updatedHistory = [newEntry, ...history];
+          setHistory(updatedHistory);
+          localStorage.setItem('btp-bordereau-history', JSON.stringify(updatedHistory));
+          await firestoreService.saveBordereauArchive(newEntry);
+
+          downloadBlob(pdfBlob, safeFileName);
+          alert("Bordereau enregistré, téléchargé et sauvegardé dans le cloud.");
+      } catch (error) {
+          console.error(error);
+          alert("Erreur de génération ou de sauvegarde cloud du PDF.");
+          return;
+      }
+
+      setSelectedDocs([]);
+      setDocObs({});
+      setDocCopies({});
   };
 
   const filteredHistory = history.filter(h => {
@@ -786,8 +904,16 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
     }
   };
 
-  // Modified to return a Promise
-  const handleExportPDF = (elementId: string, filenameRef: string): Promise<void> => {
+  const downloadBlob = (blob: Blob, filename: string) => {
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.click();
+      window.URL.revokeObjectURL(url);
+  };
+
+  const generatePDFBlob = (elementId: string, filenameRef: string): Promise<Blob> => {
     return new Promise((resolve, reject) => {
         const element = document.getElementById(elementId);
         if (!element) {
@@ -816,10 +942,10 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
         // @ts-ignore
         if (window.html2pdf) {
             // @ts-ignore
-            window.html2pdf().set(opt).from(element).save().then(() => {
+            window.html2pdf().set(opt).from(element).outputPdf('blob').then((blob: Blob) => {
                 setIsExporting(false);
                 element.classList.remove('pdf-mode');
-                resolve();
+                resolve(blob);
             }).catch((err: any) => {
                 setIsExporting(false);
                 element.classList.remove('pdf-mode');
@@ -832,6 +958,11 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
             reject("Lib not loaded");
         }
     });
+  };
+
+  const handleExportPDF = async (elementId: string, filenameRef: string): Promise<void> => {
+      const blob = await generatePDFBlob(elementId, filenameRef);
+      downloadBlob(blob, `Bordereau_${filenameRef.replace(/[^a-z0-9]/gi, '_')}.pdf`);
   };
 
   const BordereauTemplate = ({ data, docs, isPreview = false }: { data: typeof formData, docs: typeof currentSelection | SavedBordereau['documents'], isPreview?: boolean }) => {
@@ -1054,7 +1185,7 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
              </button>
              {canModify && (
                  <button 
-                    onClick={handleArchiveBordereau} 
+                    onClick={handleArchiveBordereauCloud} 
                     className="flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-[13px] font-bold transition-all shadow-md active:scale-95 border border-amber-500"
                 >
                     <DownloadCloud size={16} />
@@ -1074,41 +1205,55 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
                <div className="grid grid-cols-2 gap-5">
                    <div>
                        <label className="block text-[11px] font-semibold text-gray-500 dark:text-slate-400 mb-2 uppercase tracking-wide">De la part de</label>
-                       <select 
-                           className="w-full p-2.5 border border-gray-200 dark:border-slate-700 rounded-lg text-[13px] bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 outline-none transition-all appearance-none"
-                           value={formData.from}
-                           onChange={e => setFormData({...formData, from: e.target.value})}
-                       >
-                           {INTERNAL_DEPARTMENTS.map(dept => <option key={dept} value={dept}>{dept}</option>)}
-                           <option value="Autre">Autre...</option>
-                       </select>
+                        <select 
+                            className="w-full p-2.5 border border-gray-200 dark:border-slate-700 rounded-lg text-[13px] bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 outline-none transition-all appearance-none"
+                            value={formData.from}
+                            onChange={e => setFormData({...formData, from: e.target.value})}
+                        >
+                            <option value="" disabled>Sélectionner...</option>
+                            {dynamicSenders.map((s: string) => <option key={s} value={s}>{s}</option>)}
+                            <optgroup label="Départements Internes">
+                                {INTERNAL_DEPARTMENTS.map(dept => <option key={dept} value={dept}>{dept}</option>)}
+                            </optgroup>
+                        </select>
                    </div>
                    <div>
                        <label className="block text-[11px] font-semibold text-gray-500 dark:text-slate-400 mb-2 uppercase tracking-wide">Destinataire</label>
-                       <select 
-                           className="w-full p-2.5 border border-gray-200 dark:border-slate-700 rounded-lg text-[13px] bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 outline-none font-bold transition-all appearance-none"
-                           value={formData.to}
-                           onChange={e => {
-                               const newTo = e.target.value;
-                               let newAttn = '';
-                               if (stakeholders) {
-                                    const found = (Object.values(stakeholders) as Stakeholder[]).find(s => s.name === newTo);
-                                    if (found && found.contacts.length > 0) {
-                                        newAttn = found.contacts[0];
+                        <select 
+                            className="w-full p-2.5 border border-gray-200 dark:border-slate-700 rounded-lg text-[13px] bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 outline-none font-bold transition-all appearance-none"
+                            value={formData.to}
+                            onChange={e => {
+                                const newTo = e.target.value;
+                                let newAttn = '';
+                                // Check fixed stakeholders first
+                                if (stakeholders) {
+                                     const found = (Object.values(stakeholders) as Stakeholder[]).find(s => s.name === newTo);
+                                     if (found && found.contacts.length > 0) {
+                                         newAttn = found.contacts[0];
+                                     }
+                                }
+                                // Check dynamic recipients from settings
+                                if (!newAttn) {
+                                    const foundD = dynamicRecipients.find(r => r.name === newTo);
+                                    if (foundD && foundD.contacts.length > 0) {
+                                        newAttn = foundD.contacts[0];
                                     }
-                               }
-                               setFormData({...formData, to: newTo, attn: newAttn});
-                           }}
-                       >
-                           <option value="" disabled>Sélectionner...</option>
-                           {stakeholders && (
-                               <>
-                                   {stakeholders.client.name && <option value={stakeholders.client.name}>{stakeholders.client.name} (Client)</option>}
-                                   {stakeholders.consultant.name && <option value={stakeholders.consultant.name}>{stakeholders.consultant.name} (M.O.E)</option>}
-                                   {stakeholders.control.name && <option value={stakeholders.control.name}>{stakeholders.control.name} (Contrôle)</option>}
-                               </>
-                           )}
-                       </select>
+                                }
+                                setFormData({...formData, to: newTo, attn: newAttn});
+                            }}
+                        >
+                            <option value="" disabled>Sélectionner...</option>
+                            {dynamicRecipients.map((r: Stakeholder) => <option key={r.name} value={r.name}>{r.name}</option>)}
+                            <optgroup label="Intervenants Projet">
+                                {stakeholders && (
+                                    <>
+                                        {stakeholders.client.name && <option value={stakeholders.client.name}>{stakeholders.client.name} (Client)</option>}
+                                        {stakeholders.consultant.name && <option value={stakeholders.consultant.name}>{stakeholders.consultant.name} (M.O.E)</option>}
+                                        {stakeholders.control.name && <option value={stakeholders.control.name}>{stakeholders.control.name} (Contrôle)</option>}
+                                    </>
+                                )}
+                            </optgroup>
+                        </select>
                    </div>
                    <div className="col-span-2">
                        <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">À l'attention de</label>

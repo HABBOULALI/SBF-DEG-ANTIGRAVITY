@@ -76,5 +76,25 @@ export const firestoreService = {
       console.error("Error listening to documents: ", error);
       onError(error);
     });
+  },
+
+  saveBordereauArchive: async (archive: { id: string; [key: string]: any }) => {
+    try {
+      const archiveRef = doc(db, 'bordereauArchives', archive.id);
+      await setDoc(archiveRef, cleanData(archive));
+    } catch (error) {
+      console.error("Error saving bordereau archive: ", error);
+      throw error;
+    }
+  },
+
+  deleteBordereauArchive: async (id: string) => {
+    try {
+      const archiveRef = doc(db, 'bordereauArchives', id);
+      await deleteDoc(archiveRef);
+    } catch (error) {
+      console.error("Error deleting bordereau archive: ", error);
+      throw error;
+    }
   }
 };

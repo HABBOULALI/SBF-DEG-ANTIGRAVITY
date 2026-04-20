@@ -28,6 +28,10 @@ interface AppSettings {
         consultant: Stakeholder;
         control: Stakeholder;
     };
+    recipients: Stakeholder[];
+    senders: string[];
+    googleDriveScriptUrl?: string;
+    googleDriveRootFolderId?: string;
 }
 
 interface UserData {
@@ -57,11 +61,23 @@ export const SettingsView: React.FC = () => {
         client: { name: 'Maître d\'Ouvrage', contacts: ['M. Le Directeur Technique'] },
         consultant: { name: 'Bureau d\'Études Structure', contacts: ['M. L\'Ingénieur Conseil'] },
         control: { name: 'Bureau de Contrôle', contacts: ['M. Le Contrôleur Technique'] }
-    }
+    },
+    recipients: [
+        { name: 'Maître d\'Ouvrage', contacts: ['Directeur Technique'] },
+        { name: 'Bureau de Contrôle', contacts: ['Contrôleur Technique'] }
+    ],
+    senders: ['Directeur de Projet', 'Chef de Chantier', 'Ingénieur Méthodes']
+    ,
+    googleDriveScriptUrl: '',
+    googleDriveRootFolderId: ''
   });
 
-  const [newType, setNewType] = useState('');
+  const [selectedRecipientIdx, setSelectedRecipientIdx] = useState<number | null>(null);
+  const [newContact, setNewContact] = useState('');
 
+  const [newType, setNewType] = useState('');
+  const [newRecipient, setNewRecipient] = useState('');
+  const [newSender, setNewSender] = useState('');
   const [loading, setLoading] = useState(false);
   const [users, setUsers] = useState<UserData[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
@@ -237,6 +253,31 @@ export const SettingsView: React.FC = () => {
             </p>
         </div>
 
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 transition-colors space-y-4">
+            <div>
+                <h3 className="text-base font-semibold text-gray-700 dark:text-slate-300 transition-colors">Configuration Google Drive</h3>
+                <p className="text-xs text-gray-500 mt-1">
+                    Ajoutez l'URL du Web App Apps Script et, si vous en avez un, l'identifiant du dossier racine Drive.
+                </p>
+            </div>
+            <div className="space-y-3">
+                <input
+                    name="googleDriveScriptUrl"
+                    value={settings.googleDriveScriptUrl || ''}
+                    onChange={handleChange}
+                    className="w-full p-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-[13px] transition-colors"
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                />
+                <input
+                    name="googleDriveRootFolderId"
+                    value={settings.googleDriveRootFolderId || ''}
+                    onChange={handleChange}
+                    className="w-full p-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-[13px] transition-colors"
+                    placeholder="ID du dossier Drive racine (optionnel)"
+                />
+            </div>
+        </div>
+
         {/* Section Logo */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 {/* Logo SBF (Gauche) */}
@@ -374,6 +415,189 @@ export const SettingsView: React.FC = () => {
                     >
                         <Plus size={18} />
                     </button>
+                </div>
+            </div>
+        </div>
+
+        {/* Nouveaux Listes : Destinataires et Expéditeurs */}
+        <div className="space-y-8 mt-8">
+            <div className="space-y-4">
+                <h3 className="text-base font-semibold border-b dark:border-slate-800 pb-2 text-gray-700 dark:text-slate-300 transition-colors flex items-center gap-2">
+                    <Users size={18} className="text-green-500" /> Gestion des Destinataires et Contacts
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Liste des Destinataires */}
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 transition-colors space-y-4">
+                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">Destinataires</label>
+                        <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2">
+                            {(settings.recipients || []).map((rec, idx) => (
+                                <div 
+                                    key={idx} 
+                                    onClick={() => setSelectedRecipientIdx(idx)}
+                                    className={`flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer group ${selectedRecipientIdx === idx ? 'bg-green-50 border-green-200 dark:bg-green-900/20 dark:border-green-800' : 'bg-slate-50 border-slate-100 dark:bg-slate-800/50 dark:border-slate-700 hover:border-green-200'}`}
+                                >
+                                    <span className={`text-sm font-bold ${selectedRecipientIdx === idx ? 'text-green-700 dark:text-green-400' : 'text-slate-600 dark:text-slate-300'}`}>
+                                        {rec.name}
+                                    </span>
+                                    <button 
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            const newRecs = settings.recipients.filter((_, i) => i !== idx);
+                                            setSettings({...settings, recipients: newRecs});
+                                            if (selectedRecipientIdx === idx) setSelectedRecipientIdx(null);
+                                        }}
+                                        className="text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="flex gap-2 mt-4 pt-4 border-t dark:border-slate-800">
+                            <input 
+                                type="text" 
+                                value={newRecipient}
+                                onChange={(e) => setNewRecipient(e.target.value)}
+                                placeholder="Nom du destinataire..."
+                                className="flex-1 p-2 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-500"
+                            />
+                            <button 
+                                onClick={() => {
+                                    if (newRecipient.trim()) {
+                                        const val = newRecipient.trim();
+                                        if (!settings.recipients.some(r => r.name === val)) {
+                                            const newR = { name: val, contacts: [] };
+                                            setSettings({...settings, recipients: [...settings.recipients, newR]});
+                                            setSelectedRecipientIdx(settings.recipients.length);
+                                        }
+                                        setNewRecipient('');
+                                    }
+                                }}
+                                className="bg-green-600 text-white px-3 rounded-lg hover:bg-green-700 transition-colors"
+                            >
+                                <Plus size={18} />
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Liste des Contacts (À l'attention de) */}
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 transition-colors space-y-4">
+                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                            Contacts pour : <span className="text-green-600 dark:text-green-400">
+                                {selectedRecipientIdx !== null ? settings.recipients[selectedRecipientIdx]?.name : '---'}
+                            </span>
+                        </label>
+                        
+                        {selectedRecipientIdx !== null ? (
+                            <>
+                                <div className="flex flex-wrap gap-2 min-h-[100px] content-start">
+                                    {settings.recipients[selectedRecipientIdx].contacts.map((contact, cIdx) => (
+                                        <div key={cIdx} className="flex items-center gap-2 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 px-3 py-1.5 rounded-lg border border-blue-100 dark:border-blue-900/30 text-[13px] font-medium group">
+                                            {contact}
+                                            <button 
+                                                onClick={() => {
+                                                    const updatedRecs = [...settings.recipients];
+                                                    updatedRecs[selectedRecipientIdx].contacts = updatedRecs[selectedRecipientIdx].contacts.filter((_, i) => i !== cIdx);
+                                                    setSettings({...settings, recipients: updatedRecs});
+                                                }}
+                                                className="text-blue-400 hover:text-red-500 transition-colors"
+                                            >
+                                                <X size={14} />
+                                            </button>
+                                        </div>
+                                    ))}
+                                    {settings.recipients[selectedRecipientIdx].contacts.length === 0 && (
+                                        <div className="w-full py-8 text-center text-slate-400 text-xs italic border-2 border-dashed border-slate-100 dark:border-slate-800 rounded-xl">
+                                            Aucun responsable configuré
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="flex gap-2 mt-4 pt-4 border-t dark:border-slate-800">
+                                    <input 
+                                        type="text" 
+                                        value={newContact}
+                                        onChange={(e) => setNewContact(e.target.value)}
+                                        placeholder="Nom du responsable (À l'attention de...)"
+                                        className="flex-1 p-2 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+                                    <button 
+                                        onClick={() => {
+                                            if (newContact.trim()) {
+                                                const updatedRecs = [...settings.recipients];
+                                                if (!updatedRecs[selectedRecipientIdx].contacts.includes(newContact.trim())) {
+                                                    updatedRecs[selectedRecipientIdx].contacts.push(newContact.trim());
+                                                    setSettings({...settings, recipients: updatedRecs});
+                                                }
+                                                setNewContact('');
+                                            }
+                                        }}
+                                        className="bg-blue-600 text-white px-3 rounded-lg hover:bg-blue-700 transition-colors"
+                                    >
+                                        <Plus size={18} />
+                                    </button>
+                                </div>
+                            </>
+                        ) : (
+                            <div className="flex flex-col items-center justify-center h-48 text-slate-400 space-y-2">
+                                <Users size={32} className="opacity-20" />
+                                <p className="text-xs">Sélectionnez un destinataire à gauche pour gérer ses contacts</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            <div className="space-y-4">
+                <h3 className="text-base font-semibold border-b dark:border-slate-800 pb-2 text-gray-700 dark:text-slate-300 transition-colors flex items-center gap-2">
+                    <UserPlus size={18} className="text-purple-500" /> Liste "De la part de"
+                </h3>
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 transition-colors space-y-4">
+                    <div className="flex flex-wrap gap-2">
+                        {(settings.senders || []).map((sender, idx) => (
+                            <div key={idx} className="flex items-center gap-2 bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300 px-3 py-1.5 rounded-lg border border-purple-100 dark:border-purple-900/30 text-[13px] font-medium group">
+                                {sender}
+                                <button 
+                                    onClick={() => setSettings({...settings, senders: settings.senders.filter((_, i) => i !== idx)})}
+                                    className="text-purple-400 hover:text-red-500 transition-colors"
+                                >
+                                    <X size={14} />
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="flex gap-2 mt-4">
+                        <input 
+                            type="text" 
+                            value={newSender}
+                            onChange={(e) => setNewSender(e.target.value)}
+                            placeholder="Nouvel expéditeur..."
+                            className="flex-1 p-2 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-[13px] outline-none focus:ring-2 focus:ring-purple-500"
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' && newSender.trim()) {
+                                    e.preventDefault();
+                                    const val = newSender.trim();
+                                    if (!(settings.senders || []).includes(val)) {
+                                        setSettings({...settings, senders: [...(settings.senders || []), val]});
+                                    }
+                                    setNewSender('');
+                                }
+                            }}
+                        />
+                        <button 
+                            onClick={() => {
+                                if (newSender.trim()) {
+                                    const val = newSender.trim();
+                                    if (!(settings.senders || []).includes(val)) {
+                                        setSettings({...settings, senders: [...(settings.senders || []), val]});
+                                    }
+                                    setNewSender('');
+                                }
+                            }}
+                            className="bg-purple-600 text-white px-3 rounded-lg hover:bg-purple-700 transition-colors"
+                        >
+                            <Plus size={18} />
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
