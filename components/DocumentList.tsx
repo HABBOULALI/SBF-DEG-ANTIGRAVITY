@@ -18,7 +18,7 @@ interface DocumentListProps {
   initialFilter?: ApprovalStatus | 'ALL';
 }
 
-type SortKey = 'lot' | 'classement' | 'poste' | 'name' | 'code' | 'index' | 'transmittalDate' | 'transmittalRef' | 'observationDate' | 'observationRef' | 'status' | 'approvalDate' | 'returnDate' | 'approvedSendDate' | 'approvedReturnDate';
+type SortKey = 'lot' | 'classement' | 'poste' | 'name' | 'code' | 'index' | 'transmittalDate' | 'transmittalRef' | 'observationDate' | 'observationRef' | 'status' | 'approvalDate' | 'returnDate' | 'approvedSendDate' | 'approvedSendRef' | 'approvedReturnDate';
 
 // Helper type for flattened rows
 interface FlatRow {
@@ -56,6 +56,14 @@ declare global {
   }
 }
 
+// Helper to get effective status from a revision (considering sendHistory)
+const getEffectiveStatus = (rev: Revision): ApprovalStatus => {
+    if (rev.sendHistory && rev.sendHistory.length > 0) {
+        return rev.sendHistory[rev.sendHistory.length - 1].status;
+    }
+    return rev.status;
+};
+
 export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocument, onUpdateDocument, onDeleteDocument, onNavigateToBordereau, onAddToBordereau, initialFilter }) => {
   const { user } = useAuth();
   const isViewer = user?.role === 'viewer';
@@ -66,6 +74,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
 
   const [filter, setFilter] = useState<string>(initialFilter || 'ALL');
   const [natureFilter, setNatureFilter] = useState<string>('ALL');
+  const [recipientFilter, setRecipientFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState(''); // State pour la recherche textuelle
   const [isListening, setIsListening] = useState(false); // State pour le micro
 
@@ -204,7 +213,6 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
     recognition.start();
   };
 
-
   // 1. APLATIR LA STRUCTURE (Flatten)
   const allRows: FlatRow[] = useMemo(() => {
       const rows: FlatRow[] = [];
@@ -220,40 +228,76 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
       return rows;
   }, [documents]);
 
+  const uniqueRecipients = useMemo(() => {
+    const recipients = new Set<string>();
+    documents.forEach(doc => {
+        doc.revisions.forEach(rev => {
+            if (rev.sendHistory) {
+                rev.sendHistory.forEach(s => {
+                    if (s.recipientName) recipients.add(s.recipientName.trim());
+                });
+            }
+            if (rev.recipient) recipients.add(rev.recipient.trim());
+            if (rev.recipients) {
+                rev.recipients.forEach(r => { if(r) recipients.add(r.trim()); });
+            }
+        });
+    });
+    return Array.from(recipients).filter(Boolean).sort();
+  }, [documents]);
+
   // 2. FILTRER (Status + Recherche Texte + Nature)
   const filteredRows = useMemo(() => {
-    return allRows.filter(({ rev, doc }) => {
-        // Filtre Statut
-        // Filtre Statut (Groupé)
+    return allRows.filter(({ rev, doc, isLatest }) => {
+        // Filtre Statut - synchronisé avec la dernière révision
         let matchStatus = true;
         if (filter !== 'ALL') {
+            // Pour le suivi par statut, on ne s'intéresse qu'à la révision la plus récente
+            if (!isLatest) return false;
+
+            // Utiliser le statut effectif (dernier envoi de sendHistory si existe)
+            const effectiveStatus = getEffectiveStatus(rev);
+
             if (filter === 'APPROVED_GROUP') {
-                matchStatus = rev.status === ApprovalStatus.APPROVED || rev.status === ApprovalStatus.APPROVED_WITH_COMMENTS;
+                matchStatus = effectiveStatus === ApprovalStatus.APPROVED || effectiveStatus === ApprovalStatus.APPROVED_WITH_COMMENTS;
             } else if (filter === 'REJECTED') {
-                matchStatus = rev.status === ApprovalStatus.REJECTED;
+                matchStatus = effectiveStatus === ApprovalStatus.REJECTED;
             } else if (filter === 'PENDING') {
-                matchStatus = rev.status === ApprovalStatus.PENDING;
+                matchStatus = effectiveStatus === ApprovalStatus.PENDING;
             } else if (filter === 'NO_RESPONSE') {
-                matchStatus = rev.status === ApprovalStatus.NO_RESPONSE;
+                matchStatus = effectiveStatus === ApprovalStatus.NO_RESPONSE;
             } else {
-                matchStatus = rev.status === filter;
+                matchStatus = effectiveStatus === filter;
             }
         }
         
         // Filtre Nature
         const matchNature = natureFilter === 'ALL' || doc.nature === natureFilter;
+
+        // Filtre Destinataire
+        const rowRecipients = new Set<string>();
+        if (rev.sendHistory) rev.sendHistory.forEach(s => { if (s.recipientName) rowRecipients.add(s.recipientName.trim()); });
+        if (rev.recipient) rowRecipients.add(rev.recipient.trim());
+        if (rev.recipients) rev.recipients.forEach(r => { if(r) rowRecipients.add(r.trim()); });
+
+        let matchRecipient = true;
+        if (recipientFilter !== 'ALL') {
+            matchRecipient = rowRecipients.has(recipientFilter.trim());
+        }
         
-        // Filtre Recherche (Code, Nom, Lot, Poste)
+        // Filtre Recherche (Code, Nom, Lot, Poste, Destinataire)
         const lowerQuery = searchQuery.toLowerCase();
+        const recipientListStr = Array.from(rowRecipients).join(' ').toLowerCase();
         const matchSearch = !searchQuery || 
             doc.code.toLowerCase().includes(lowerQuery) ||
             doc.name.toLowerCase().includes(lowerQuery) ||
             doc.lot.toLowerCase().includes(lowerQuery) ||
-            doc.poste.toLowerCase().includes(lowerQuery);
+            doc.poste.toLowerCase().includes(lowerQuery) ||
+            recipientListStr.includes(lowerQuery);
 
-        return matchStatus && matchNature && matchSearch;
+        return matchStatus && matchNature && matchRecipient && matchSearch;
     });
-  }, [allRows, filter, natureFilter, searchQuery]);
+  }, [allRows, filter, natureFilter, recipientFilter, searchQuery]);
 
   // 3. TRIER (SORT)
   const sortedRows = useMemo(() => {
@@ -317,23 +361,52 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
     const isActive = sortConfig?.key === sortKey;
     return (
         <th 
-            className={`px-2 py-1.5 border border-slate-600 font-bold text-[9px] uppercase tracking-wider cursor-pointer hover:bg-slate-700 transition-colors select-none group align-middle ${className}`}
+            className={`px-1 py-1 border border-slate-600 font-bold text-[8px] uppercase tracking-wider cursor-pointer hover:bg-slate-700 transition-colors select-none group align-middle ${className}`}
             onClick={() => requestSort(sortKey)}
             rowSpan={rowSpan}
         >
-            <div className={`flex items-center gap-1 ${className?.includes('text-center') ? 'justify-center' : ''}`}>
+            <div className={`flex items-center gap-0.5 ${className?.includes('text-center') ? 'justify-center' : ''}`}>
                 {label}
                 <div className="flex flex-col text-slate-400 group-hover:text-white">
                     {isActive ? (
-                        sortConfig.direction === 'asc' ? <ChevronUp size={12} className="text-blue-400" /> : <ChevronDown size={12} className="text-blue-400" />
+                        sortConfig.direction === 'asc' ? <ChevronUp size={10} className="text-blue-400" /> : <ChevronDown size={10} className="text-blue-400" />
                     ) : (
-                        <ArrowUpDown size={12} className="opacity-0 group-hover:opacity-50" />
+                        <ArrowUpDown size={10} className="opacity-0 group-hover:opacity-50" />
                     )}
                 </div>
             </div>
         </th>
     );
   };
+
+  // --- STATUS COUNTS (synchronisé avec le statut effectif et les filtres) ---
+  const statusCounts = useMemo(() => {
+    const counts = { all: 0, approved: 0, rejected: 0, noResponse: 0, pending: 0 };
+    documents.forEach(doc => {
+      // Appliquer les filtres de document (Nature)
+      if (natureFilter !== 'ALL' && doc.nature !== natureFilter) return;
+
+      const latestRev = doc.revisions[doc.revisions.length - 1];
+      if (!latestRev) return;
+
+      // Appliquer le filtre destinataire sur la dernière révision
+      if (recipientFilter !== 'ALL') {
+         const rowRecipients = new Set<string>();
+         if (latestRev.sendHistory) latestRev.sendHistory.forEach(s => { if (s.recipientName) rowRecipients.add(s.recipientName.trim()); });
+         if (latestRev.recipient) rowRecipients.add(latestRev.recipient.trim());
+         if (latestRev.recipients) latestRev.recipients.forEach(r => { if(r) rowRecipients.add(r.trim()); });
+         if (!rowRecipients.has(recipientFilter.trim())) return;
+      }
+
+      const effectiveStatus = getEffectiveStatus(latestRev);
+      counts.all++;
+      if (effectiveStatus === ApprovalStatus.APPROVED || effectiveStatus === ApprovalStatus.APPROVED_WITH_COMMENTS) counts.approved++;
+      else if (effectiveStatus === ApprovalStatus.REJECTED) counts.rejected++;
+      else if (effectiveStatus === ApprovalStatus.NO_RESPONSE) counts.noResponse++;
+      else if (effectiveStatus === ApprovalStatus.PENDING) counts.pending++;
+    });
+    return counts;
+  }, [documents, natureFilter, recipientFilter]);
 
   // ... (Reset Form, etc.)
   const resetForm = () => {
@@ -688,13 +761,6 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                               } else {
                                   send.approvalFiles = [...currentFiles, fileDataUrl];
                               }
-                          } else if (uploadTarget.type === 'approval') {
-                              const currentFiles = send.approvalFiles || [];
-                              if (currentFiles.length >= 3) {
-                                  alert("Maximum 3 fichiers approuvés autorisés par envoi.");
-                              } else {
-                                  send.approvalFiles = [...currentFiles, fileDataUrl];
-                              }
                           }
                           onUpdateDocument(updatedDoc);
                       }
@@ -837,7 +903,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
     const sendHistory = [...(rev.sendHistory || [])];
     
     const oldStatus = doc.revisions[revIdx].sendHistory?.[sendIdx].status;
-    const newStatus = editSendForm.status;
+    const newSendStatus = editSendForm.status;
 
     sendHistory[sendIdx] = { 
         ...sendHistory[sendIdx], 
@@ -850,7 +916,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
 
     // Logic 1: If status is set to REJECTED and this is the latest revision, 
     // automatically create a new revision with next index.
-    if (newStatus === ApprovalStatus.REJECTED && revIdx === updatedDoc.revisions.length - 1) {
+    if (newSendStatus === ApprovalStatus.REJECTED && revIdx === updatedDoc.revisions.length - 1) {
         const nextIndex = getNextIndex(rev.index);
         // Avoid duplicates if already exists
         const alreadyExists = updatedDoc.revisions.some(r => r.index === nextIndex);
@@ -873,7 +939,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
     }
     // Logic 2: UNDO. If oldStatus was REJECTED and newStatus is NOT REJECTED,
     // and we have a "orphan" next revision that is still empty, remove it.
-    else if (oldStatus === ApprovalStatus.REJECTED && newStatus !== ApprovalStatus.REJECTED) {
+    else if (oldStatus === ApprovalStatus.REJECTED && newSendStatus !== ApprovalStatus.REJECTED) {
         const nextIdx = revIdx + 1;
         if (updatedDoc.revisions[nextIdx]) {
             const nextRev = updatedDoc.revisions[nextIdx];
@@ -948,383 +1014,290 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
       window.open(fileUrl, '_blank', 'noopener,noreferrer');
   };
 
-  const getStatusText = (status: ApprovalStatus) => {
-      switch (status) {
-        case ApprovalStatus.APPROVED: return "Approuvé";
-        case ApprovalStatus.APPROVED_WITH_COMMENTS: return "Approuvé avec réserves";
-        case ApprovalStatus.REJECTED: return "Non Approuvé";
-        case ApprovalStatus.NO_RESPONSE: return "Sans Réponse";
-        case ApprovalStatus.PENDING: return "En cours de révision";
-        default: return status;
-      }
-  };
-
-  const handleExportPDF = () => {
-    const element = document.getElementById('document-table-container');
-    if (!element) return;
-
-    // Trigger state change to re-render table without unwanted columns and with proper colspan
-    setIsExportingPdf(true);
-
-    // Give React a moment to re-render before capturing
-    setTimeout(() => {
-        const opt = {
-          margin: [10, 10, 10, 10], // Consistant margins
-          filename: `SBF_GED_Suivi_${new Date().toLocaleDateString('fr-FR').replace(/\//g, '-')}.pdf`,
-          image: { type: 'jpeg', quality: 1.0 },
-          html2canvas: { 
-            scale: 2, 
-            useCORS: true, 
-            logging: false,
-            backgroundColor: '#ffffff', // Force white background for capture
-            scrollY: 0, // Prevent issues with scrolled content
-            windowWidth: element.scrollWidth + 100 // Dynamic window width based on content
-          },
-          jsPDF: { unit: 'mm', format: 'a3', orientation: 'landscape', compress: true },
-          pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
-        };
-
-        // @ts-ignore
-        if (window.html2pdf) {
-          // @ts-ignore
-          window.html2pdf().set(opt).from(element).save().then(() => {
-            setIsExportingPdf(false);
-          }).catch((err: any) => {
-            console.error("PDF Export Error:", err);
-            setIsExportingPdf(false);
-          });
-        } else {
-          alert("Une erreur technique est survenue: la librairie de génération PDF n'est pas disponible.");
-          setIsExportingPdf(false);
-        }
-    }, 1200); // Increased timeout to ensure full render even with large tables
-  };
-
-  const handleExportExcel = async () => {
+  // --- EXPORT TO XLSX ---
+  const exportToXlsx = async () => {
     setIsExporting(true);
     try {
-        const workbook = new ExcelJS.Workbook();
-        const worksheet = workbook.addWorksheet('Suivi');
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Suivi Documents');
 
-        // 1. Gestion des Logos
-        // Logo SBF (Gauche - Col A1:D5)
-        if (appSettings.logo) {
-            try {
-                const response = await fetch(appSettings.logo);
-                const buffer = await response.arrayBuffer();
-                const imageId = workbook.addImage({ buffer, extension: 'png' });
-                worksheet.addImage(imageId, {
-                    tl: { col: 0, row: 0 },
-                    ext: { width: 140, height: 75 },
-                    editAs: 'oneCell'
-                });
-            } catch (e) { console.error("Logo SBF error", e); }
-        }
+      // Headers
+      sheet.columns = [
+        { header: 'N°', key: 'num', width: 5 },
+        { header: 'Lot', key: 'lot', width: 6 },
+        { header: 'Poste', key: 'poste', width: 8 },
+        { header: 'Type', key: 'type', width: 6 },
+        { header: 'CODE', key: 'code', width: 20 },
+        { header: 'Indice', key: 'index', width: 8 },
+        { header: 'Désignation', key: 'name', width: 40 },
+        { header: 'Date Envoi', key: 'transmittalDate', width: 12 },
+        { header: 'Réf Envoi', key: 'transmittalRef', width: 15 },
+        { header: 'Date Obs.', key: 'observationDate', width: 12 },
+        { header: 'Réf Obs.', key: 'observationRef', width: 15 },
+        { header: 'Statut', key: 'status', width: 18 },
+        { header: 'Destinataire', key: 'recipient', width: 15 },
+        { header: 'Date Envoi App.', key: 'approvedSendDate', width: 14 },
+        { header: 'Réf Envoi App.', key: 'approvedSendRef', width: 15 },
+        { header: 'Ret. App.', key: 'approvedReturnDate', width: 12 },
+      ];
 
-        // Logo MDO (Droite - Col M1:O5)
-        if (appSettings.logoMDO) {
-            try {
-                const response = await fetch(appSettings.logoMDO);
-                const buffer = await response.arrayBuffer();
-                const imageId = workbook.addImage({ buffer, extension: 'png' });
-                worksheet.addImage(imageId, {
-                    tl: { col: 12, row: 0 },
-                    ext: { width: 100, height: 70 },
-                    editAs: 'oneCell'
-                });
-            } catch (e) { console.error("Logo MDO error", e); }
-        }
+      // Style header row
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 9 };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+      headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
+      headerRow.height = 24;
 
-        // 2. En-têtes (Merged Cells)
-        // [A1:D5] - Cellule Logo Gauche
-        worksheet.mergeCells('A1:D5');
-        worksheet.getCell('A1').border = { top: {style:'thin'}, left: {style:'thin'}, bottom: {style:'thin'}, right: {style:'thin'} };
-
-        // [E1:L5] - Titre Central
-        worksheet.mergeCells('E1:L5');
-        const titleCell = worksheet.getCell('E1');
-        titleCell.value = "REGISTRE DES SUIVI DES PLANS D'EXECUTION";
-        titleCell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-        titleCell.font = { bold: true, size: 16, color: { argb: 'FF1E3A8A' } };
-        titleCell.border = { top: {style:'thin'}, left: {style:'thin'}, bottom: {style:'thin'}, right: {style:'thin'} };
-        
-        // [M1:O5] - Cellule Logo Droite
-        worksheet.mergeCells('M1:O5');
-        worksheet.getCell('M1').border = { top: {style:'thin'}, left: {style:'thin'}, bottom: {style:'thin'}, right: {style:'thin'} };
-
-        // 3. Ligne d'informations (Ligne 6)
-        worksheet.mergeCells('A6:G6');
-        const projectCell = worksheet.getCell('A6');
-        projectCell.value = `PROJET : ${appSettings.projectName} (${appSettings.projectCode})`;
-        projectCell.font = { bold: true, italic: true, size: 10 };
-        projectCell.alignment = { vertical: 'middle', horizontal: 'left' };
-
-        worksheet.mergeCells('H6:O6');
-        const dateCell = worksheet.getCell('H6');
-        dateCell.value = `Date d'édition : ${new Date().toLocaleDateString()}`;
-        dateCell.font = { bold: true, size: 10 };
-        dateCell.alignment = { vertical: 'middle', horizontal: 'right' };
-
-        // 4. Table Headers (Row 7 & 8)
-        const applyHeaderStyle = (cell: ExcelJS.Cell) => {
-            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E40AF' } }; // Corporate Blue (blue-800)
-            cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 9 };
-            cell.alignment = { vertical: 'middle', horizontal: 'center' };
-            cell.border = { top: {style:'thin'}, left: {style:'thin'}, bottom: {style:'thin'}, right: {style:'thin'} };
+      const statusLabel = (s: ApprovalStatus) => {
+        const map: Record<string, string> = {
+          [ApprovalStatus.APPROVED]: 'Approuvé',
+          [ApprovalStatus.APPROVED_WITH_COMMENTS]: 'Approuvé (R)',
+          [ApprovalStatus.REJECTED]: 'Non Approuvé',
+          [ApprovalStatus.NO_RESPONSE]: 'Sans réponse',
+          [ApprovalStatus.PENDING]: 'En cours',
         };
+        return map[s] || s;
+      };
 
-        // Merges for headers (Updated to 3 cols each for Envoi and Note)
-        worksheet.mergeCells(7, 1, 8, 1); worksheet.getCell(7, 1).value = "N°";
-        worksheet.mergeCells(7, 2, 8, 2); worksheet.getCell(7, 2).value = "Lot";
-        worksheet.mergeCells(7, 3, 8, 3); worksheet.getCell(7, 3).value = "Poste";
-        worksheet.mergeCells(7, 4, 8, 4); worksheet.getCell(7, 4).value = "Type";
-        worksheet.mergeCells(7, 5, 8, 5); worksheet.getCell(7, 5).value = "Nature";
-        worksheet.mergeCells(7, 6, 8, 6); worksheet.getCell(7, 6).value = "CODE";
-        worksheet.mergeCells(7, 7, 8, 7); worksheet.getCell(7, 7).value = "Indice";
-        worksheet.mergeCells(7, 8, 8, 8); worksheet.getCell(7, 8).value = "Désignation Document";
-        
-        // Group: Date d'Envoi (Col 9, 10, 11)
-        worksheet.mergeCells(7, 9, 7, 11); worksheet.getCell(7, 9).value = "Date d'Envoi";
-        worksheet.getCell(8, 9).value = "Date";
-        worksheet.getCell(8, 10).value = "Réf";
-        worksheet.getCell(8, 11).value = "Lien P.J";
-        
-        // Group: Note d'Obs. (Col 12, 13, 14)
-        worksheet.mergeCells(7, 12, 7, 14); worksheet.getCell(7, 12).value = "Note d'Obs.";
-        worksheet.getCell(8, 12).value = "Date";
-        worksheet.getCell(8, 13).value = "Réf";
-        worksheet.getCell(8, 14).value = "Lien P.J";
-        
-        worksheet.mergeCells(7, 15, 8, 15); worksheet.getCell(7, 15).value = "Statut";
-        
-        // Group: Envoi App. (Col 16, 17, 18)
-        worksheet.mergeCells(7, 16, 7, 18); worksheet.getCell(7, 16).value = "Envoi App.";
-        worksheet.getCell(8, 16).value = "Date";
-        worksheet.getCell(8, 17).value = "Réf";
-        worksheet.getCell(8, 18).value = "Lien P.J";
-        
-        worksheet.mergeCells(7, 19, 8, 19); worksheet.getCell(7, 19).value = "Ret. App.";
-        worksheet.mergeCells(7, 20, 8, 20); worksheet.getCell(7, 20).value = "Destinataire";
+      // Data rows
+      sortedRows.forEach((row, idx) => {
+        const { doc, rev } = row;
 
-        for(let c=1; c<=20; c++) {
-            applyHeaderStyle(worksheet.getCell(7, c));
-            applyHeaderStyle(worksheet.getCell(8, c));
-        }
-
-        // 5. Data Rows
-        sortedRows.forEach((row, index) => {
-            const hasHistory = row.rev.sendHistory && row.rev.sendHistory.length > 0;
-            const sends = hasHistory ? row.rev.sendHistory! : [{
-                transmittalDate: row.rev.transmittalDate,
-                transmittalRef: row.rev.transmittalRef,
-                observationDate: row.rev.observationDate,
-                observationRef: row.rev.observationRef,
-                status: row.rev.status,
-                approvalDate: row.rev.approvalDate,
-                returnDate: row.rev.returnDate,
-                recipientName: (row.rev.recipients && row.rev.recipients.length > 0 ? row.rev.recipients.join(', ') : (row.rev.recipient || ''))
-            } as SendRecord];
-
-            const firstRowIdx = worksheet.rowCount + 1;
-
-            sends.forEach((s) => {
-                const r = worksheet.addRow([
-                    index + 1,
-                    row.doc.lot,
-                    row.doc.poste,
-                    row.doc.classement,
-                    row.doc.nature || '-',
-                    row.doc.code,
-                    row.rev.index,
-                    row.doc.name,
-                    s.transmittalDate || '-',
-                    s.transmittalRef || '-',
-                    s.transmittalFiles && s.transmittalFiles.length > 0 ? s.transmittalFiles[0] : '-',
-                    s.observationDate || '-',
-                    s.observationRef || '-',
-                    s.observationFiles && s.observationFiles.length > 0 ? s.observationFiles[0] : '-',
-                    getStatusText(s.status),
-                    s.approvalDate || '-',
-                    s.approvalRef || '-',
-                    s.approvalFiles && s.approvalFiles.length > 0 ? s.approvalFiles[0] : '-',
-                    s.returnDate || '-',
-                    s.recipientName || '-'
-                ]);
-
-                const isEven = index % 2 === 0;
-                r.eachCell((cell, colNumber) => {
-                    cell.border = { top: {style:'thin'}, left: {style:'thin'}, bottom: {style:'thin'}, right: {style:'thin'} };
-                    
-                    // Alternating background for better readability
-                    if (!isEven) {
-                        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } }; // Light gray
-                    }
-
-                    cell.alignment = { 
-                        vertical: 'middle', 
-                        horizontal: [1,2,3,4,5,7,9,10,11,12,13,14,15,16,17,18,19,20].includes(colNumber) ? 'center' : 'left',
-                        wrapText: colNumber === 8 // Only wrap doc name
-                    };
-                    cell.font = { size: 8 };
-                    if (colNumber === 6) cell.font = { bold: true, size: 8 };
-                    
-                    if (colNumber === 15) {
-                        if (s.status === ApprovalStatus.APPROVED) cell.font = { color: { argb: 'FF15803D' }, bold: true, size: 8 };
-                        else if (s.status === ApprovalStatus.REJECTED) cell.font = { color: { argb: 'FFB91C1C' }, bold: true, size: 8 };
-                    }
-                    if (colNumber === 20) {
-                        cell.font = { color: { argb: 'FF1E40AF' }, bold: true, size: 8 };
-                    }
-                });
+        if (rev.sendHistory && rev.sendHistory.length > 0) {
+          rev.sendHistory.forEach(s => {
+            const dataRow = sheet.addRow({
+              num: idx + 1,
+              lot: doc.lot,
+              poste: doc.poste,
+              type: doc.classement,
+              code: doc.code,
+              index: rev.index,
+              name: doc.name,
+              transmittalDate: s.transmittalDate,
+              transmittalRef: s.transmittalRef,
+              observationDate: s.observationDate || '',
+              observationRef: s.observationRef || '',
+              status: statusLabel(s.status),
+              recipient: s.recipientName || '',
+              approvedSendDate: s.approvalDate || '',
+              approvedSendRef: s.approvalRef || '',
+              approvedReturnDate: rev.approvedReturnDate || '',
             });
-
-            // Merge metadata cells if multiple sends
-            if (sends.length > 1) {
-                const lastRowIdx = worksheet.rowCount;
-                for (let col = 1; col <= 8; col++) {
-                    worksheet.mergeCells(firstRowIdx, col, lastRowIdx, col);
-                }
-            }
-        });
-
-        // 6. Column Widths
-        worksheet.columns = [
-            { width: 4 }, { width: 6 }, { width: 6 }, { width: 6 }, { width: 12 }, { width: 18 }, { width: 6 }, { width: 40 }, 
-            { width: 11 }, { width: 11 }, { width: 15 }, { width: 11 }, { width: 11 }, { width: 15 }, 
-            { width: 14 }, { width: 11 }, { width: 11 }, { width: 15 }, { width: 11 }, { width: 13 }
-        ];
-
-        // Final Logo adjustment
-        if (appSettings.logoMDO) {
-            try {
-                const response = await fetch(appSettings.logoMDO);
-                const buffer2 = await response.arrayBuffer();
-                const imageId2 = workbook.addImage({ buffer: buffer2, extension: 'png' });
-                worksheet.addImage(imageId2, {
-                    tl: { col: 12, row: 0 },
-                    ext: { width: 100, height: 70 },
-                    editAs: 'oneCell'
-                });
-            } catch (e) { console.error("Logo MDO reposition error", e); }
+            dataRow.font = { size: 9 };
+            dataRow.alignment = { vertical: 'middle' };
+          });
+        } else {
+          const dataRow = sheet.addRow({
+            num: idx + 1,
+            lot: doc.lot,
+            poste: doc.poste,
+            type: doc.classement,
+            code: doc.code,
+            index: rev.index,
+            name: doc.name,
+            transmittalDate: rev.transmittalDate,
+            transmittalRef: rev.transmittalRef,
+            observationDate: rev.observationDate || '',
+            observationRef: rev.observationRef || '',
+            status: statusLabel(rev.status),
+            recipient: rev.recipients?.join(', ') || rev.recipient || '',
+            approvedSendDate: rev.approvedSendDate || '',
+            approvedSendRef: rev.approvedSendRef || '',
+            approvedReturnDate: rev.approvedReturnDate || '',
+          });
+          dataRow.font = { size: 9 };
+          dataRow.alignment = { vertical: 'middle' };
         }
+      });
 
-        const buffer = await workbook.xlsx.writeBuffer();
-        const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-        saveAs(blob, `Suivi_Documents_${appSettings.projectCode}_${new Date().toISOString().split('T')[0]}.xlsx`);
+      // Auto-filter & borders
+      sheet.autoFilter = { from: 'A1', to: `P${sheet.rowCount}` };
+      sheet.eachRow((row) => {
+        row.eachCell((cell) => {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' },
+          };
+        });
+      });
 
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      saveAs(blob, `Suivi_${appSettings.projectCode}.xlsx`);
     } catch (error) {
-        console.error("Erreur export Excel", error);
-        alert("Erreur lors de l'export Excel : " + (error instanceof Error ? error.message : String(error)));
+      console.error('Export error:', error);
+      alert("Erreur lors de l'export Excel.");
     } finally {
-        setIsExporting(false);
+      setIsExporting(false);
     }
   };
 
+  // --- EXPORT TO PDF ---
+  const exportToPdf = async () => {
+    setIsExportingPdf(true);
+    await new Promise(r => setTimeout(r, 100));
+    try {
+      const element = document.getElementById('document-list-root');
+      if (!element) return;
+      element.classList.add('pdf-mode');
+
+      const opt = {
+        margin: [5, 5, 5, 5],
+        filename: `Suivi_${appSettings.projectCode}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, letterRendering: true },
+        jsPDF: { unit: 'mm', format: 'a3', orientation: 'landscape' as const },
+        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+      };
+
+      await window.html2pdf().set(opt).from(element).save();
+      element.classList.remove('pdf-mode');
+    } catch (error) {
+      console.error('PDF export error:', error);
+      alert("Erreur lors de l'export PDF.");
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  // ====================== RENDER ======================
   return (
-    <div className="flex flex-col h-full bg-gray-50/50">
-      {/* --- HEADER --- */}
-      <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center p-4 bg-white border-b border-gray-200 shadow-sm gap-4">
-        <div className="mb-2 xl:mb-0">
-          <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-            <FileText className="text-blue-600" />
-            Suivi des Documents
-          </h2>
-          <p className="text-sm text-gray-500">Gérez les révisions et le statut d'approbation</p>
-        </div>
-        
-        <div className="flex flex-col md:flex-row items-center gap-3 w-full xl:w-auto">
-            {/* Search & Filter Group */}
-            <div className="flex items-center gap-3 w-full md:w-auto h-10">
-                <div className="relative flex-1 md:w-64 h-full">
-                    <input 
-                      type="text" 
-                      placeholder="Rechercher (Code, Nom...)" 
-                      className="w-full h-full pl-9 pr-8 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none shadow-sm"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                    />
-                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                    <button 
-                      onClick={handleVoiceSearch}
-                      className={`absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-gray-100 ${isListening ? 'text-red-500 animate-pulse' : 'text-gray-400'}`}
-                    >
-                      {isListening ? <MicOff size={14} /> : <Mic size={14} />}
-                    </button>
-                </div>
+    <>
+      <div id="document-list-root" className="flex flex-col h-full bg-gray-50 dark:bg-slate-900 transition-colors">
+      
+      {/* --- TOOLBAR --- */}
+      {!isExportingPdf && (
+        <div className="bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 px-4 py-3 space-y-3 no-print transition-colors">
+          {/* Top Row: Title + Actions */}
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="text-lg font-black text-slate-800 dark:text-white uppercase tracking-wider flex items-center gap-2">
+              <FileSpreadsheet size={20} className="text-blue-600" />
+              Suivi des Documents
+              <span className="text-xs font-normal text-gray-400 ml-2">({statusCounts.all} docs)</span>
+            </h2>
+            <div className="flex items-center gap-2">
+              {/* Export Buttons */}
+              <button
+                onClick={exportToXlsx}
+                disabled={isExporting}
+                className="px-3 py-1.5 text-[10px] font-bold uppercase bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-all flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+              >
+                {isExporting ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
+                Excel
+              </button>
+              <button
+                onClick={exportToPdf}
+                disabled={isExportingPdf}
+                className="px-3 py-1.5 text-[10px] font-bold uppercase bg-red-600 text-white rounded-lg hover:bg-red-700 transition-all flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+              >
+                {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                PDF
+              </button>
+              {/* New Document Button */}
+              {canModify && (
+                <button
+                  onClick={handleCreateClick}
+                  className="px-3 py-1.5 text-[10px] font-bold uppercase bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all flex items-center gap-1.5 shadow-lg shadow-blue-200 dark:shadow-blue-900/30"
+                >
+                  <Plus size={14} /> Nouveau
+                </button>
+              )}
+            </div>
+          </div>
 
-                <div className="relative h-full">
-                    <select 
-                      className="h-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none appearance-none bg-white shadow-sm cursor-pointer hover:border-blue-400 transition-colors"
-                      value={filter}
-                      onChange={(e) => setFilter(e.target.value as any)}
-                    >
-                      <option value="ALL">Tous les statuts</option>
-                      <option value="APPROVED_GROUP">Approuvé</option>
-                      <option value={ApprovalStatus.REJECTED}>Non Approuvé</option>
-                      <option value={ApprovalStatus.PENDING}>En cours de révision</option>
-                      <option value={ApprovalStatus.NO_RESPONSE}>Sans réponse</option>
-                    </select>
-                    <Filter size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                </div>
+          {/* Middle Row: Status Filters */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <Filter size={14} className="text-gray-400" />
+            {[
+              { key: 'ALL', label: 'Tous', count: statusCounts.all, color: 'bg-gray-100 text-gray-700 border-gray-300 dark:bg-slate-700 dark:text-slate-200 dark:border-slate-600' },
+              { key: 'APPROVED_GROUP', label: 'Approuvé', count: statusCounts.approved, color: 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
+              { key: 'REJECTED', label: 'Non Approuvé', count: statusCounts.rejected, color: 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800' },
+              { key: 'NO_RESPONSE', label: 'Sans réponse', count: statusCounts.noResponse, color: 'bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-800' },
+              { key: 'PENDING', label: 'En cours', count: statusCounts.pending, color: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' },
+            ].map(f => (
+              <button
+                key={f.key}
+                onClick={() => setFilter(f.key)}
+                className={`px-2.5 py-1 text-[10px] font-bold rounded-full border transition-all ${
+                  filter === f.key
+                    ? `${f.color} ring-2 ring-offset-1 ring-blue-400 scale-105`
+                    : 'bg-white dark:bg-slate-700 text-gray-500 dark:text-slate-400 border-gray-200 dark:border-slate-600 hover:border-blue-300'
+                }`}
+              >
+                {f.label} <span className="ml-1 opacity-70">({f.count})</span>
+              </button>
+            ))}
+          </div>
 
-                <div className="relative h-full">
-                    <select 
-                      className="h-full pl-9 pr-8 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none appearance-none bg-white shadow-sm cursor-pointer hover:border-blue-400 transition-colors font-medium text-blue-700"
-                      value={natureFilter}
-                      onChange={(e) => setNatureFilter(e.target.value)}
-                    >
-                      <option value="ALL">Toutes les natures</option>
-                      {appSettings.documentNatures?.map(t => (
-                          <option key={t} value={t}>{t}</option>
-                      ))}
-                    </select>
-                    <FileText size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-500" />
-                    <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                </div>
+          {/* Bottom Row: Nature Filter + Search */}
+          <div className="flex items-center gap-3">
+            {/* Nature Filter */}
+            <select
+              value={natureFilter}
+              onChange={e => setNatureFilter(e.target.value)}
+              className="px-2 py-1.5 text-[10px] font-bold border border-gray-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-gray-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500 outline-none uppercase"
+            >
+              <option value="ALL">Toutes Natures</option>
+              {appSettings.documentNatures?.map(n => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+
+            {/* Recipient Filter */}
+            <select
+              value={recipientFilter}
+              onChange={e => setRecipientFilter(e.target.value)}
+              className="px-2 py-1.5 text-[10px] font-bold border border-gray-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-gray-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500 outline-none uppercase"
+            >
+              <option value="ALL">Tous Destinataires</option>
+              {uniqueRecipients.map(r => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+
+            {/* Search Bar */}
+            <div className="flex-1 relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Rechercher par code, désignation, lot, poste..."
+                className="w-full pl-9 pr-10 py-1.5 text-xs border border-gray-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-gray-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500 outline-none placeholder:text-gray-400"
+              />
+              <button
+                onClick={handleVoiceSearch}
+                className={`absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full transition-all ${
+                  isListening ? 'text-red-500 bg-red-50 animate-pulse' : 'text-gray-400 hover:text-blue-500'
+                }`}
+                title="Recherche vocale"
+              >
+                {isListening ? <MicOff size={14} /> : <Mic size={14} />}
+              </button>
             </div>
 
-            {/* Buttons Group - Vertical List */}
-            <div className="flex flex-col gap-2 w-full md:w-auto min-w-[140px]">
-                <button 
-                  onClick={handleExportExcel}
-                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 shadow-sm active:scale-95 transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap w-full justify-start"
-                  disabled={isExporting}
-                  title="Exporter Excel"
-                >
-                  {isExporting ? <Loader2 className="animate-spin" size={16} /> : <FileSpreadsheet size={16} />}
-                  <span>Excel</span>
-                </button>
-
-                <button 
-                  onClick={handleExportPDF}
-                  className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 shadow-sm active:scale-95 transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap w-full justify-start"
-                  disabled={isExportingPdf}
-                  title="Exporter PDF"
-                >
-                  {isExportingPdf ? <Loader2 className="animate-spin" size={16} /> : <FileIcon size={16} />}
-                  <span>PDF</span>
-                </button>
-
-                {canModify && (
-                  <button 
-                    onClick={handleCreateClick}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm active:scale-95 transition-all text-sm font-medium whitespace-nowrap w-full justify-start"
-                  >
-                    <Plus size={16} />
-                    <span>Nouveau</span>
-                  </button>
-                )}
-            </div>
+            {/* Results count */}
+            <span className="text-[10px] text-gray-400 font-medium whitespace-nowrap">
+              {sortedRows.length} résultat{sortedRows.length !== 1 ? 's' : ''}
+            </span>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* --- TABLE --- */}
-      <div className="flex-1 overflow-auto p-4">
-        {/* Dynamic Class for PDF Mode: Forces white bg, no border, full visible overflow */}
-        <div id="document-table-container" className={`bg-white dark:bg-slate-900 rounded-xl shadow border border-gray-200 dark:border-slate-800 overflow-hidden relative transition-colors ${isExportingPdf ? 'pdf-mode' : ''}`}>
-          
-          {/* --- PDF EXPORT HEADER (Visible only in PDF Mode via CSS) --- */}
-          <div id="pdf-export-header" className="hidden flex-row border-4 border-slate-900 bg-white h-40">
+      {/* --- CONTENT AREA --- */}
+      <div className="flex-1 flex flex-col min-h-0">
+        {/* Upload indicator */}
+        {isUploadingFile && (
+          <div className="bg-blue-50 dark:bg-blue-900/30 px-4 py-2 flex items-center gap-2 text-blue-700 dark:text-blue-300 text-xs font-medium border-b border-blue-100 dark:border-blue-800">
+            <Loader2 size={14} className="animate-spin" /> Upload en cours...
+          </div>
+        )}
+
+        {/* PDF Export Header (hidden by default, shown in pdf-mode) */}
+        <div id="pdf-export-header" className="hidden border-2 border-slate-900 bg-white" style={{ minHeight: '120px' }}>
+            <div className="flex h-full">
               {/* Left: Logo */}
               <div className="w-[20%] border-r-2 border-slate-900 flex items-center justify-center p-4">
                   {appSettings.logo ? (
@@ -1350,15 +1323,16 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                       Cadre Réservé Administration
                   </div>
               </div>
-          </div>
+            </div>
+        </div>
 
-          <div className="hidden pdf-spacer w-full h-8 bg-white"></div>
+        <div className="hidden pdf-spacer w-full h-8 bg-white"></div>
 
-          <div className={`overflow-x-auto ${isExportingPdf ? 'overflow-visible' : ''}`}>
-            <table className="w-full text-[11px] text-left border-collapse">
-              <thead className="bg-slate-800 dark:bg-slate-950 text-white text-[9px] uppercase sticky top-0 z-10 transition-colors">
+        <div className={`overflow-auto flex-1 ${isExportingPdf ? 'overflow-visible' : ''}`}>
+            <table className="w-full text-[9px] text-left border-collapse">
+              <thead className="bg-slate-800 dark:bg-slate-950 text-white text-[8px] uppercase sticky top-0 z-20 transition-colors">
                 <tr>
-                  <th className="px-2 py-2 border border-slate-600 font-bold text-center w-10 align-middle" rowSpan={2}>N°</th>
+                  <th className="px-1 py-1 border border-slate-600 font-bold text-center w-8 align-middle text-[8px]" rowSpan={2}>N°</th>
                   <SortHeader label="Lot" sortKey="lot" className="w-12 text-center" rowSpan={2} />
                   <SortHeader label="Poste" sortKey="poste" className="w-12 text-center" rowSpan={2} />
                   <SortHeader label="Type" sortKey="classement" className="w-12 text-center" rowSpan={2} />
@@ -1367,22 +1341,22 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                   <SortHeader label="Désignation Document" sortKey="name" className="min-w-[200px]" rowSpan={2} />
                   
                   {/* Group headers with 3 sub-columns */}
-                  <th id="th-transmis" colSpan={isExportingPdf ? 2 : 3} className="px-2 py-1 border border-slate-600 text-center bg-slate-900 dark:bg-slate-800 font-bold align-middle transition-colors">Date d'Envoi</th>
-                  <th id="th-visa" colSpan={isExportingPdf ? 2 : 3} className="px-2 py-1 border border-slate-600 text-center bg-slate-900 dark:bg-slate-800 font-bold align-middle transition-colors">Note d'Obs.</th>
+                  <th id="th-transmis" colSpan={isExportingPdf ? 2 : 3} className="px-1 py-1 border border-slate-600 text-center bg-slate-900 dark:bg-slate-800 font-bold align-middle transition-colors text-[8px]">Date d'Envoi</th>
+                  <th id="th-visa" colSpan={isExportingPdf ? 2 : 3} className="px-1 py-1 border border-slate-600 text-center bg-slate-900 dark:bg-slate-800 font-bold align-middle transition-colors text-[8px]">Note d'Obs.</th>
                   
                   <SortHeader label="Statut" sortKey="status" className="w-32 text-center" rowSpan={2} />
-                  <th className="px-2 py-2 border border-slate-600 text-center font-bold align-middle w-24" rowSpan={2}>Destinataire</th>
+                  <th className="px-1 py-1 border border-slate-600 text-center font-bold align-middle w-20 text-[8px]" rowSpan={2}>Destinataire</th>
                   
-                  <th id="th-envoi-app" colSpan={isExportingPdf ? 2 : 3} className="px-2 py-1 border border-slate-600 text-center bg-slate-900 dark:bg-slate-800 font-bold align-middle transition-colors">Envoi App.</th>
+                  <th id="th-envoi-app" colSpan={isExportingPdf ? 2 : 3} className="px-1 py-1 border border-slate-600 text-center bg-slate-900 dark:bg-slate-800 font-bold align-middle transition-colors text-[8px]">Envoi App.</th>
                   <SortHeader label="Ret. App." sortKey="approvedReturnDate" className="w-24 text-center" rowSpan={2} />
                   {/* Hide Actions Column in PDF and for Viewers */}
-                  {!isExportingPdf && canModify && <th className="px-2 py-2 border border-slate-600 text-center font-bold align-middle no-print" rowSpan={2}>Actions</th>}
+                  {!isExportingPdf && canModify && <th className="px-1 py-1 border border-slate-600 text-center font-bold align-middle no-print text-[8px]" rowSpan={2}>Actions</th>}
                 </tr>
                 <tr>
                   <SortHeader label="Date" sortKey="transmittalDate" className="w-24 bg-slate-800 text-center" />
                   <SortHeader label="Réf" sortKey="transmittalRef" className="w-24 bg-slate-800 text-center" />
                   {/* Conditionally Render File Icon Header with PJ title */}
-                  {!isExportingPdf && <th className="px-1 py-1 border border-slate-600 w-10 text-center align-middle no-print text-[7px]">P.J</th>}
+                  {!isExportingPdf && <th className="px-0.5 py-0.5 border border-slate-600 w-8 text-center align-middle no-print text-[7px]">P.J</th>}
                   
                   <SortHeader label="Date" sortKey="observationDate" className="w-24 bg-slate-800 text-center" />
                   <SortHeader label="Réf" sortKey="observationRef" className="w-24 bg-slate-800 text-center" />
@@ -1424,27 +1398,27 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                         </tr>
                       )}
                     <tr 
-                      className={`hover:bg-blue-50/50 transition-colors group ${!isLatest ? 'bg-gray-50/50 text-gray-400 text-xs italic' : ''}`}
+                      className={`hover:bg-blue-50/50 transition-colors group ${!isLatest ? 'bg-gray-50/50 text-gray-400 text-[8px] italic' : ''}`}
                     >
-                      <td className="px-1.5 py-1 border border-gray-300 dark:border-slate-700 text-center font-medium text-gray-400 align-middle text-[10px]">{idx + 1}</td>
-                      <td className="px-1.5 py-1 border border-gray-300 dark:border-slate-700 font-bold text-center align-middle dark:text-slate-300">{doc.lot}</td>
-                      <td className="px-1.5 py-1 border border-gray-300 dark:border-slate-700 text-center align-middle dark:text-slate-400 uppercase italic text-[10px]">{doc.poste}</td>
-                      <td className="px-1.5 py-1 border border-gray-300 dark:border-slate-700 text-center align-middle dark:text-slate-400">{doc.classement}</td>
-                      <td className="px-1.5 py-1 border border-gray-300 dark:border-slate-700 font-mono font-bold text-blue-900 dark:text-blue-400 text-center align-middle whitespace-nowrap text-[11px]">{doc.code}</td>
-                      <td className="px-1.5 py-1 border border-gray-300 dark:border-slate-700 text-center font-black align-middle text-indigo-600 dark:text-indigo-400">{rev.index}</td>
-                      <td className="px-1.5 py-1 border border-gray-300 dark:border-slate-700 max-w-[250px] align-middle dark:text-slate-200 leading-tight" title={doc.name}>
+                      <td className="px-1 py-0.5 border border-gray-300 dark:border-slate-700 text-center font-medium text-gray-400 align-middle text-[8px]">{idx + 1}</td>
+                      <td className="px-1 py-0.5 border border-gray-300 dark:border-slate-700 font-bold text-center align-middle dark:text-slate-300 text-[9px]">{doc.lot}</td>
+                      <td className="px-1 py-0.5 border border-gray-300 dark:border-slate-700 text-center align-middle dark:text-slate-400 uppercase italic text-[8px]">{doc.poste}</td>
+                      <td className="px-1 py-0.5 border border-gray-300 dark:border-slate-700 text-center align-middle dark:text-slate-400 text-[9px]">{doc.classement}</td>
+                      <td className="px-1 py-0.5 border border-gray-300 dark:border-slate-700 font-mono font-bold text-blue-900 dark:text-blue-400 text-center align-middle whitespace-nowrap text-[9px]">{doc.code}</td>
+                      <td className="px-1 py-0.5 border border-gray-300 dark:border-slate-700 text-center font-black align-middle text-indigo-600 dark:text-indigo-400 text-[9px]">{rev.index}</td>
+                      <td className="px-1 py-0.5 border border-gray-300 dark:border-slate-700 max-w-[220px] align-middle dark:text-slate-200 leading-tight text-[9px]" title={doc.name}>
                           <div className="line-clamp-2">{doc.name}</div>
                       </td>
                       
                       {/* Transmittal */}
-                      <td className="px-2 py-3 text-center border border-gray-300 align-middle whitespace-nowrap">
+                      <td className="px-1 py-1 text-center border border-gray-300 align-middle whitespace-nowrap text-[8px]">
                           {rev.sendHistory && rev.sendHistory.length > 0 ? (
                               <div className="flex flex-col gap-2">
                                   {rev.sendHistory.map((s, i) => <div key={i} className="h-[24px] flex items-center justify-center">{s.transmittalDate || '-'}</div>)}
                               </div>
                           ) : ( rev.transmittalDate )}
                       </td>
-                      <td className="px-2 py-3 text-center border border-gray-300 text-xs align-middle whitespace-nowrap">
+                      <td className="px-1 py-1 text-center border border-gray-300 text-[8px] align-middle whitespace-nowrap">
                           {rev.sendHistory && rev.sendHistory.length > 0 ? (
                               <div className="flex flex-col gap-2">
                                   {rev.sendHistory.map((s, i) => <div key={i} className="h-[24px] flex items-center justify-center font-mono">{s.transmittalRef || '-'}</div>)}
@@ -1453,7 +1427,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                       </td>
                       
                       {!isExportingPdf && (
-                        <td className="px-2 py-3 text-center border border-gray-300 align-middle no-print">
+                        <td className="px-1 py-1 text-center border border-gray-300 align-middle no-print text-[8px]">
                             {rev.sendHistory && rev.sendHistory.length > 0 ? (
                                 <div className="flex flex-col gap-2 scale-90">
                                     {rev.sendHistory.map((s, i) => {
@@ -1486,14 +1460,14 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                       )}
 
                       {/* Observation */}
-                      <td className="px-2 py-3 text-center border border-gray-300 align-middle whitespace-nowrap">
+                      <td className="px-1 py-1 text-center border border-gray-300 align-middle whitespace-nowrap text-[8px]">
                           {rev.sendHistory && rev.sendHistory.length > 0 ? (
                               <div className="flex flex-col gap-2">
                                   {rev.sendHistory.map((s, i) => <div key={i} className="h-[24px] flex items-center justify-center">{s.observationDate || '-'}</div>)}
                               </div>
                           ) : ( rev.observationDate || '-' )}
                       </td>
-                      <td className="px-2 py-3 text-center border border-gray-300 text-xs align-middle whitespace-nowrap">
+                      <td className="px-1 py-1 text-center border border-gray-300 text-[8px] align-middle whitespace-nowrap">
                           {rev.sendHistory && rev.sendHistory.length > 0 ? (
                               <div className="flex flex-col gap-2">
                                   {rev.sendHistory.map((s, i) => <div key={i} className="h-[24px] flex items-center justify-center font-mono">{s.observationRef || '-'}</div>)}
@@ -1502,7 +1476,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                       </td>
                       
                       {!isExportingPdf && (
-                        <td className="px-2 py-3 text-center border border-gray-300 align-middle no-print">
+                        <td className="px-1 py-1 text-center border border-gray-300 align-middle no-print text-[8px]">
                             {rev.sendHistory && rev.sendHistory.length > 0 ? (
                                 <div className="flex flex-col gap-2 scale-90">
                                     {rev.sendHistory.map((s, i) => {
@@ -1535,11 +1509,11 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                       )}
                       
                       {/* Status */}
-                      <td className="px-2 py-3 text-center border border-gray-300 align-middle">
+                      <td className="px-1 py-1 text-center border border-gray-300 align-middle text-[8px]">
                           {rev.sendHistory && rev.sendHistory.length > 0 ? (
                               <div className="flex flex-col gap-2 items-center">
                                   {rev.sendHistory.map((s, i) => (
-                                      <span key={i} className={`h-[24px] px-2 py-0.5 rounded-full text-[9px] font-bold uppercase inline-flex items-center justify-center gap-1 border min-w-[110px] ${
+                                      <span key={i} className={`h-[20px] px-1.5 py-0 rounded-full text-[7px] font-bold uppercase inline-flex items-center justify-center gap-0.5 border min-w-[90px] ${
                                           s.status === ApprovalStatus.APPROVED ? 'bg-green-100 text-green-700 border-green-200' :
                                           s.status === ApprovalStatus.APPROVED_WITH_COMMENTS ? 'bg-green-50 text-green-600 border-green-200' :
                                           s.status === ApprovalStatus.REJECTED ? 'bg-red-100 text-red-700 border-red-200' :
@@ -1559,7 +1533,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                                   ))}
                               </div>
                           ) : (
-                            <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase inline-flex items-center gap-1 border ${
+                            <span className={`px-1.5 py-0.5 rounded-full text-[8px] font-bold uppercase inline-flex items-center gap-0.5 border ${
                               rev.status === ApprovalStatus.APPROVED ? 'bg-green-100 text-green-700 border-green-200' :
                               rev.status === ApprovalStatus.APPROVED_WITH_COMMENTS ? 'bg-green-50 text-green-600 border-green-200' :
                               rev.status === ApprovalStatus.REJECTED ? 'bg-red-100 text-red-700 border-red-200' :
@@ -1580,12 +1554,12 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                       </td>
 
                       {/* Destinataire */}
-                      <td className="px-2 py-3 text-center border border-gray-300 align-middle">
+                      <td className="px-1 py-1 text-center border border-gray-300 align-middle text-[8px]">
                           {rev.sendHistory && rev.sendHistory.length > 0 ? (
                               <div className="flex flex-col gap-2 items-center justify-center">
                                   {rev.sendHistory.map((s, i) => (
                                       <div key={i} className="h-[24px] flex items-center justify-center w-full">
-                                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200 whitespace-nowrap">
+                                          <span className="px-1 py-0 rounded text-[8px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200 whitespace-nowrap">
                                               {s.recipientName || 'Néant'}
                                           </span>
                                       </div>
@@ -1603,7 +1577,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                                   return (
                                       <div className="flex flex-wrap gap-1 justify-center">
                                           {allRecipients.map((r, i) => (
-                                              <span key={i} className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200 whitespace-nowrap">
+                                              <span key={i} className="px-1 py-0 rounded text-[8px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200 whitespace-nowrap">
                                                   {r}
                                               </span>
                                           ))}
@@ -1613,18 +1587,18 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                           )}
                       </td>
                       {/* Envoi Approuvé Group (3 sub-columns) */}
-                      <td className="px-2 py-3 text-center border border-gray-300 align-middle whitespace-nowrap">
+                      <td className="px-1 py-1 text-center border border-gray-300 align-middle whitespace-nowrap text-[8px]">
                           {rev.sendHistory && rev.sendHistory.length > 0 ? (
                               <div className="flex flex-col gap-2">{rev.sendHistory.map((s, i) => <div key={i} className="h-[24px] flex items-center justify-center">{s.approvalDate || '-'}</div>)}</div>
                           ) : (rev.approvedSendDate || '-')}
                       </td>
-                      <td className="px-2 py-3 text-center border border-gray-300 text-xs align-middle whitespace-nowrap">
+                      <td className="px-1 py-1 text-center border border-gray-300 text-[8px] align-middle whitespace-nowrap">
                           {rev.sendHistory && rev.sendHistory.length > 0 ? (
                               <div className="flex flex-col gap-2">{rev.sendHistory.map((s, i) => <div key={i} className="h-[24px] flex items-center justify-center font-mono">{s.approvalRef || '-'}</div>)}</div>
                           ) : (rev.approvedSendRef || '-')}
                       </td>
                       {!isExportingPdf && (
-                        <td className="px-2 py-3 text-center border border-gray-300 align-middle no-print">
+                        <td className="px-1 py-1 text-center border border-gray-300 align-middle no-print text-[8px]">
                             {rev.sendHistory && rev.sendHistory.length > 0 ? (
                                 <div className="flex flex-col gap-2 scale-90">
                                     {rev.sendHistory.map((s, i) => {
@@ -1655,13 +1629,13 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                             )}
                         </td>
                       )}
-                      <td className="px-1.5 py-1 border border-gray-300 dark:border-slate-700 text-center align-middle bg-slate-50/10 font-bold text-green-700 dark:text-green-400 w-24">
+                      <td className="px-1 py-0.5 border border-gray-300 dark:border-slate-700 text-center align-middle bg-slate-50/10 font-bold text-green-700 dark:text-green-400 w-20 text-[8px]">
                           {rev.approvedReturnDate ? new Date(rev.approvedReturnDate).toLocaleDateString('fr-FR') : '-'}
                       </td>
 
                       {/* Actions */}
                       {!isExportingPdf && (
-                        <td className="px-2 py-3 text-center border border-gray-300 align-middle no-print min-w-[120px]">
+                        <td className="px-1 py-1 text-center border border-gray-300 align-middle no-print min-w-[100px] text-[8px]">
                             {rev.sendHistory && rev.sendHistory.length > 0 ? (
                                 <div className="flex flex-col gap-2">
                                     {rev.sendHistory.map((s, sIdx) => (
@@ -2151,6 +2125,6 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
               </div>
           </div>
       )}
-    </div>
+    </>
   );
 };
