@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Plus, Filter, Download, Clock, Edit2, Save, X, Loader2, FileSpreadsheet, ChevronUp, ChevronDown, ArrowUpDown, Bell, BellRing, Calendar, Send, Trash2, AlertTriangle, UploadCloud, FileText, Search, Mic, MicOff, Paperclip, File as FileIcon } from 'lucide-react';
+import { Plus, Filter, Download, Clock, Edit2, Edit3, Save, X, Loader2, FileSpreadsheet, ChevronUp, ChevronDown, ArrowUpDown, Bell, BellRing, Calendar, Send, Trash2, Trash, AlertTriangle, UploadCloud, FileText, Search, Mic, MicOff, Paperclip, File as FileIcon } from 'lucide-react';
 import { BTPDocument, ApprovalStatus, Revision, SendRecord } from '../types';
 import { Logo } from './Logo';
 import { useAuth } from '../context/AuthContext';
@@ -490,26 +490,27 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
 
   const getAttachmentFolderName = (type: AttachmentType) => {
       switch (type) {
-          case 'transmittal': return 'transmittals';
-          case 'observation': return 'observations';
-          case 'approval': return 'approvals';
-          default: return 'files';
+          case 'transmittal': return "Bordereaux d'Envoi";
+          case 'observation': return "Notes d'Observation";
+          case 'approval': return "Envois Approuvés";
+          default: return 'Autres';
       }
   };
 
-  const buildAttachmentBasePath = (docId: string, revId: string, type: AttachmentType) =>
-      storageService.buildPath('documents', docId, 'revisions', revId, getAttachmentFolderName(type));
+  const buildAttachmentBasePath = (type: AttachmentType) => {
+      return storageService.buildPath(getAttachmentFolderName(type));
+  };
 
   const persistAttachmentList = async (
       files: string[],
-      docId: string,
-      revId: string,
+      doc: BTPDocument,
+      rev: Revision,
       type: AttachmentType
   ) => {
-      const basePath = buildAttachmentBasePath(docId, revId, type);
+      const basePath = buildAttachmentBasePath(type);
       const persistedFiles: string[] = [];
 
-      for (const [index, fileEntry] of files.entries()) {
+      for (const [idx, fileEntry] of files.entries()) {
           if (!fileEntry) continue;
 
           if (storageService.isRemoteFileUrl(fileEntry)) {
@@ -521,10 +522,13 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
               continue;
           }
 
+          // Filename: [DOC_CODE]_Indice_[XX]_[Counter]
+          const filePrefix = `${doc.code}_Indice_${rev.index}_${idx + 1}`;
+
           const uploadResult = await storageService.uploadDataUrl(
               basePath,
               fileEntry,
-              `${type}_${Date.now()}_${index + 1}`
+              filePrefix
           );
           persistedFiles.push(uploadResult.downloadURL);
       }
@@ -535,24 +539,37 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
   const confirmAttachmentDelete = () => {
       if (!attachmentToDelete) return;
 
+      const deleteFileIcon = (prev: string[]) => {
+          const target = prev[attachmentToDelete.index];
+          if (target && storageService.isRemoteFileUrl(target)) {
+              void storageService.deleteByUrl(target);
+          }
+          const newList = prev.filter((_, i) => i !== attachmentToDelete.index);
+          
+          // Force immediate update to Firestore if editing
+          if (editingDocId) {
+              const doc = documents.find(d => d.id === editingDocId);
+              if (doc) {
+                  const updatedDoc = JSON.parse(JSON.stringify(doc)) as BTPDocument;
+                  const revIdx = updatedDoc.revisions.findIndex(r => r.id === editingRevId);
+                  if (revIdx !== -1) {
+                      const rev = updatedDoc.revisions[revIdx];
+                      if (attachmentToDelete.type === 'transmittal') rev.transmittalFiles = newList;
+                      else if (attachmentToDelete.type === 'observation') rev.observationFiles = newList;
+                      else if (attachmentToDelete.type === 'approval') rev.approvedSendFiles = newList;
+                      onUpdateDocument(updatedDoc);
+                  }
+              }
+          }
+          return newList;
+      };
+
       if (attachmentToDelete.type === 'transmittal') {
-          setNewTransmittalFiles(prev => {
-              const target = prev[attachmentToDelete.index];
-              void storageService.deleteByUrl(target);
-              return prev.filter((_, i) => i !== attachmentToDelete.index);
-          });
+          setNewTransmittalFiles(prev => deleteFileIcon(prev));
       } else if (attachmentToDelete.type === 'observation') {
-          setNewObservationFiles(prev => {
-              const target = prev[attachmentToDelete.index];
-              void storageService.deleteByUrl(target);
-              return prev.filter((_, i) => i !== attachmentToDelete.index);
-          });
+          setNewObservationFiles(prev => deleteFileIcon(prev));
       } else if (attachmentToDelete.type === 'approval') {
-          setNewApprovedSendFiles(prev => {
-              const target = prev[attachmentToDelete.index];
-              void storageService.deleteByUrl(target);
-              return prev.filter((_, i) => i !== attachmentToDelete.index);
-          });
+          setNewApprovedSendFiles(prev => deleteFileIcon(prev));
       }
       setAttachmentToDelete(null);
   };
@@ -580,9 +597,9 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
             const targetRevIdx = updatedRevs.findIndex(r => r.id === editingRevId);
             if (targetRevIdx === -1) return;
 
-            const persistedTransmittalFiles = await persistAttachmentList(newTransmittalFiles, editingDocId, editingRevId, 'transmittal');
-            const persistedObservationFiles = await persistAttachmentList(newObservationFiles, editingDocId, editingRevId, 'observation');
-            const persistedApprovalFiles = await persistAttachmentList(newApprovedSendFiles, editingDocId, editingRevId, 'approval');
+            const persistedTransmittalFiles = await persistAttachmentList(newTransmittalFiles, updatedDoc, updatedRevs[targetRevIdx], 'transmittal');
+            const persistedObservationFiles = await persistAttachmentList(newObservationFiles, updatedDoc, updatedRevs[targetRevIdx], 'observation');
+            const persistedApprovalFiles = await persistAttachmentList(newApprovedSendFiles, updatedDoc, updatedRevs[targetRevIdx], 'approval');
 
             updatedRevs[targetRevIdx] = {
                 ...updatedRevs[targetRevIdx],
@@ -632,9 +649,12 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
             const revId = crypto.randomUUID();
             const finalRef = newTransmittalRef || `B-${String(documents.length + 1).padStart(3, '0')}`;
 
-            const persistedTransmittalFiles = await persistAttachmentList(newTransmittalFiles, docId, revId, 'transmittal');
-            const persistedObservationFiles = await persistAttachmentList(newObservationFiles, docId, revId, 'observation');
-            const persistedApprovalFiles = await persistAttachmentList(newApprovedSendFiles, docId, revId, 'approval');
+            const tempDoc = { nature: newNature, code: newCode } as BTPDocument;
+            const tempRev = { index: newIndex } as Revision;
+
+            const persistedTransmittalFiles = await persistAttachmentList(newTransmittalFiles, tempDoc, tempRev, 'transmittal');
+            const persistedObservationFiles = await persistAttachmentList(newObservationFiles, tempDoc, tempRev, 'observation');
+            const persistedApprovalFiles = await persistAttachmentList(newApprovedSendFiles, tempDoc, tempRev, 'approval');
 
             docToSave = {
                 id: docId,
@@ -815,9 +835,13 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
           if (revIdx === -1) return;
 
           const rev = updatedDoc.revisions[revIdx];
-          const fileBasePath = buildAttachmentBasePath(uploadTarget.docId, uploadTarget.revId, uploadTarget.type);
+          const fileBasePath = buildAttachmentBasePath(uploadTarget.type);
+          const sanitizedFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+          // Filename: [DOC_CODE]_Indice_[XX]_[Timestamp]_[FileName]
+          const finalPath = `${fileBasePath}/${storageService.buildPath(`${doc.code}_Indice_${rev.index}_${Date.now()}_${sanitizedFileName}`)}`;
+          
           const uploadResult = await storageService.uploadFile(
-              `${fileBasePath}/${storageService.buildPath(`${Date.now()}_${file.name}`)}`,
+              finalPath,
               file,
               { contentType: file.type || 'application/octet-stream' }
           );
@@ -978,9 +1002,55 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
     onUpdateDocument(updatedDoc);
   };
 
-  const handleModalFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'transmittal' | 'observation' | 'approval') => {
+  const handleModalFileChange = async (e: React.ChangeEvent<HTMLInputElement>, type: 'transmittal' | 'observation' | 'approval') => {
       const file = e.target.files?.[0];
       if (!file) return;
+
+      // Si on modifie un document existant, on upload directement sur Drive pour plus de réactivité
+      if (editingDocId) {
+          setIsUploadingFile(true);
+          try {
+              const fileBasePath = buildAttachmentBasePath(type);
+              const sanitizedFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+              const finalPath = `${fileBasePath}/${storageService.buildPath(`${newCode}_Indice_${newIndex}_${type}_${Date.now()}_${sanitizedFileName}`)}`;
+              
+              const uploadResult = await storageService.uploadFile(
+                  finalPath,
+                  file,
+                  { contentType: file.type || 'application/octet-stream' }
+              );
+
+              // 1. Update Document in Firestore/AppState immediately for table sync
+              const doc = documents.find(d => d.id === editingDocId);
+              if (doc) {
+                  const updatedDoc = JSON.parse(JSON.stringify(doc)) as BTPDocument;
+                  const revIdx = updatedDoc.revisions.findIndex(r => r.id === editingRevId);
+                  if (revIdx !== -1) {
+                        const rev = updatedDoc.revisions[revIdx];
+                        if (type === 'transmittal') {
+                            rev.transmittalFiles = [...(rev.transmittalFiles || []), uploadResult.downloadURL];
+                            setNewTransmittalFiles(rev.transmittalFiles);
+                        } else if (type === 'observation') {
+                            rev.observationFiles = [...(rev.observationFiles || []), uploadResult.downloadURL];
+                            setNewObservationFiles(rev.observationFiles);
+                        } else if (type === 'approval') {
+                            rev.approvedSendFiles = [...(rev.approvedSendFiles || []), uploadResult.downloadURL];
+                            setNewApprovedSendFiles(rev.approvedSendFiles);
+                        }
+                        onUpdateDocument(updatedDoc);
+                  }
+              }
+          } catch (error) {
+              console.error(error);
+              alert("Erreur lors de l'upload vers Google Drive.");
+          } finally {
+              setIsUploadingFile(false);
+              e.target.value = '';
+          }
+          return;
+      }
+
+      // Pour les nouveaux documents, on garde en mémoire locale avant validation finale
       const reader = new FileReader();
       reader.onloadend = () => {
           const result = reader.result as string;
@@ -1008,6 +1078,87 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
       };
       reader.readAsDataURL(file);
       e.target.value = '';
+  };
+
+  // --- LOGIQUE FICHIERS MODAL SPÉCIFIQUE ---
+  const handleSpecificFileChange = async (e: React.ChangeEvent<HTMLInputElement>, type: 'transmittal' | 'observation' | 'approval') => {
+    const file = e.target.files?.[0];
+    if (!file || !editSendModal) return;
+
+    setIsUploadingFile(true);
+    try {
+        const doc = documents.find(d => d.id === editSendModal.docId);
+        if (!doc) return;
+
+        const rev = doc.revisions[editSendModal.revIdx];
+        const fileBasePath = buildAttachmentBasePath(type);
+        const sanitizedFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+        const finalPath = `${fileBasePath}/${storageService.buildPath(`${doc.code}_Indice_${rev.index}_${type}_${Date.now()}_${sanitizedFileName}`)}`;
+        
+        const uploadResult = await storageService.uploadFile(
+            finalPath,
+            file,
+            { contentType: file.type || 'application/octet-stream' }
+        );
+
+        // Update local form state
+        const currentFiles = [...(editSendForm[type === 'transmittal' ? 'transmittalFiles' : type === 'observation' ? 'observationFiles' : 'approvalFiles'] || [])];
+        const newFiles = [...currentFiles, uploadResult.downloadURL];
+        
+        setEditSendForm(prev => ({
+            ...prev,
+            [type === 'transmittal' ? 'transmittalFiles' : type === 'observation' ? 'observationFiles' : 'approvalFiles']: newFiles
+        }));
+
+        // Update document state for immediate sync
+        const updatedDoc = JSON.parse(JSON.stringify(doc)) as BTPDocument;
+        const targetSend = updatedDoc.revisions[editSendModal.revIdx].sendHistory?.[editSendModal.sendIdx];
+        if (targetSend) {
+            if (type === 'transmittal') targetSend.transmittalFiles = newFiles;
+            else if (type === 'observation') targetSend.observationFiles = newFiles;
+            else if (type === 'approval') targetSend.approvalFiles = newFiles;
+            onUpdateDocument(updatedDoc);
+        }
+    } catch (error) {
+        console.error(error);
+        alert("Erreur lors de l'upload vers Google Drive.");
+    } finally {
+        setIsUploadingFile(false);
+        e.target.value = '';
+    }
+  };
+
+  const handleSpecificFileDelete = async (type: 'transmittal' | 'observation' | 'approval', index: number) => {
+    if (!editSendModal) return;
+    if (!window.confirm("Supprimer cette pièce jointe ?")) return;
+
+    const doc = documents.find(d => d.id === editSendModal.docId);
+    if (!doc) return;
+
+    const currentFiles = [...(editSendForm[type === 'transmittal' ? 'transmittalFiles' : type === 'observation' ? 'observationFiles' : 'approvalFiles'] || [])];
+    const fileUrl = currentFiles[index];
+
+    if (fileUrl && storageService.isRemoteFileUrl(fileUrl)) {
+        void storageService.deleteByUrl(fileUrl);
+    }
+
+    const newFiles = currentFiles.filter((_, i) => i !== index);
+    
+    // Update local form state
+    setEditSendForm(prev => ({
+        ...prev,
+        [type === 'transmittal' ? 'transmittalFiles' : type === 'observation' ? 'observationFiles' : 'approvalFiles']: newFiles
+    }));
+
+    // Update document state for immediate sync
+    const updatedDoc = JSON.parse(JSON.stringify(doc)) as BTPDocument;
+    const targetSend = updatedDoc.revisions[editSendModal.revIdx].sendHistory?.[editSendModal.sendIdx];
+    if (targetSend) {
+        if (type === 'transmittal') targetSend.transmittalFiles = newFiles;
+        else if (type === 'observation') targetSend.observationFiles = newFiles;
+        else if (type === 'approval') targetSend.approvalFiles = newFiles;
+        onUpdateDocument(updatedDoc);
+    }
   };
 
   const openFile = (fileUrl: string) => {
@@ -1636,86 +1787,71 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                       {/* Actions */}
                       {!isExportingPdf && (
                         <td className="px-1 py-1 text-center border border-gray-300 align-middle no-print min-w-[100px] text-[8px]">
-                            {rev.sendHistory && rev.sendHistory.length > 0 ? (
-                                <div className="flex flex-col gap-2">
+                            {/* ACTIONS GLOBALES (Document/Révision) */}
+                            <div className="flex items-center justify-center gap-1 mb-2 pb-2 border-b border-gray-100 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+                                {canModify && (
+                                    <button 
+                                        onClick={(e) => handleEditClick(doc, rev, e)} 
+                                        className="p-1 px-2 text-[8px] text-blue-600 bg-blue-50/50 hover:bg-blue-100 rounded border border-blue-100 flex items-center gap-1 font-bold whitespace-nowrap transition-all"
+                                        title="Modifier les données de base du Document"
+                                    >
+                                        <Edit2 size={10} /> MODIF. DOC
+                                    </button>
+                                )}
+                                <button 
+                                    onClick={() => openReminderModal(doc.id, rev.id, rev.reminder)}
+                                    className={`p-1.5 rounded ${rev.reminder?.active ? 'text-amber-600 bg-amber-50' : 'text-gray-400 hover:bg-gray-50'}`}
+                                    title="Rappel"
+                                >
+                                    <Bell size={12} />
+                                </button>
+                                {canModify && isLatest && (
+                                    <button 
+                                        onClick={() => onAddToBordereau(doc.id)}
+                                        className="p-1.5 text-purple-600 hover:bg-purple-100 rounded"
+                                        title="Créer un nouvel envoi"
+                                    >
+                                        <Send size={12} />
+                                    </button>
+                                )}
+                                {canDelete && isLatest && (
+                                    <button 
+                                        onClick={(e) => handleDeleteClick(doc.id, e)}
+                                        className="p-1.5 text-red-500 hover:bg-red-50 rounded"
+                                        title="Supprimer le document"
+                                    >
+                                        <Trash2 size={12} />
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* ACTIONS PAR ENVOI (DESTINATAIRES) */}
+                            {rev.sendHistory && rev.sendHistory.length > 0 && (
+                                <div className="flex flex-col gap-1">
                                     {rev.sendHistory.map((s, sIdx) => (
-                                        <div key={sIdx} className="h-[24px] flex items-center justify-center gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <div key={sIdx} className="h-[24px] flex items-center justify-center gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity bg-gray-50/50 rounded hover:bg-gray-100/50 px-1 border border-transparent hover:border-gray-200">
+                                            <span className="text-[7px] text-gray-400 font-mono mr-1">#{sIdx + 1}</span>
                                             {canModify && (
                                                 <button 
                                                     onClick={() => openEditSendModal(doc.id, doc.revisions.indexOf(rev), sIdx)}
-                                                    className="p-1 text-blue-500 hover:bg-blue-50 rounded"
-                                                    title="Modifier cet envoi"
+                                                    className="p-1 px-2 text-[8px] text-indigo-600 bg-indigo-50/50 hover:bg-indigo-100 rounded border border-indigo-100 flex items-center gap-1 font-bold whitespace-nowrap transition-all"
+                                                    title="Modifier les pièces jointes et détails de l'envoi"
                                                 >
-                                                    <Edit2 size={12} />
+                                                    <Edit3 size={10} /> MODIF. SPÉCIFIQUE
                                                 </button>
                                             )}
-                                            <button 
-                                                onClick={() => openReminderModal(doc.id, rev.id, rev.reminder)}
-                                                className={`p-1 rounded ${rev.reminder?.active ? 'text-amber-600 bg-amber-50' : 'text-gray-400 hover:bg-gray-50'}`}
-                                                title="Rappel"
-                                            >
-                                                <Bell size={12} />
-                                            </button>
                                             {canDelete && (
                                                 <button 
                                                     onClick={() => deleteSendRecord(doc.id, doc.revisions.indexOf(rev), sIdx)}
-                                                    className="p-1 text-red-400 hover:bg-red-50 rounded"
+                                                    className="p-1 text-red-400 hover:bg-red-100 rounded"
                                                     title="Supprimer cet envoi"
                                                 >
-                                                    <Trash2 size={12} />
+                                                    <Trash2 size={11} />
                                                 </button>
                                             )}
                                         </div>
                                     ))}
-                                    {isLatest && canModify && (
-                                        <button 
-                                            onClick={() => onAddToBordereau(doc.id)}
-                                            className="mt-1 text-[10px] font-bold text-purple-600 hover:underline flex items-center justify-center gap-1"
-                                        >
-                                            <Send size={10} /> Nouvel Envoi
-                                        </button>
-                                    )}
                                 </div>
-                            ) : (
-                                canModify && (
-                                    <div className="flex items-center justify-center gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button 
-                                            onClick={(e) => handleEditClick(doc, rev, e)} 
-                                            className="p-1.5 text-blue-600 hover:bg-blue-100 rounded"
-                                            title="Modifier"
-                                        >
-                                            <Edit2 size={14} />
-                                        </button>
-                                        
-                                        <button 
-                                            onClick={() => openReminderModal(doc.id, rev.id, rev.reminder)}
-                                            className={`p-1.5 rounded ${rev.reminder?.active ? 'text-amber-600 bg-amber-100' : 'text-gray-400 hover:bg-gray-100'}`}
-                                            title="Rappel"
-                                        >
-                                            <Bell size={14} />
-                                        </button>
-
-                                        {isLatest && (
-                                            <button 
-                                                onClick={() => onAddToBordereau(doc.id)}
-                                                className="p-1.5 text-purple-600 hover:bg-purple-100 rounded"
-                                                title="Ajouter au Bordereau"
-                                            >
-                                                <Send size={14} />
-                                            </button>
-                                        )}
-                                        
-                                        {isLatest && canDelete && (
-                                            <button 
-                                                onClick={(e) => handleDeleteClick(doc.id, e)} 
-                                                className="p-1.5 text-red-600 hover:bg-red-100 rounded"
-                                                title="Supprimer"
-                                            >
-                                                <Trash2 size={14} />
-                                            </button>
-                                        )}
-                                    </div>
-                                )
                             )}
                         </td>
                       )}
@@ -1789,7 +1925,8 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                           </div>
                       </div>
 
-                      {editingDocId && (
+                      {/* Envoi Info - Only for NEW documents */}
+                      {!editingDocId && (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             {/* Transmittal Info */}
                             <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm space-y-4">
@@ -1827,73 +1964,20 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                             {/* Observation / Response Info */}
                             <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm space-y-4">
                                 <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-2">Réponse / Validation</h4>
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-500 mb-1">Statut</label>
-                                    <select value={newStatus} onChange={e => setNewStatus(e.target.value as ApprovalStatus)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none font-medium bg-white">
-                                        <option value={ApprovalStatus.APPROVED}>Approuvé</option>
-                                        <option value={ApprovalStatus.REJECTED}>Non Approuvé</option>
-                                        <option value={ApprovalStatus.NO_RESPONSE}>Sans réponse</option>
-                                        <option value={ApprovalStatus.PENDING}>En cours de révision</option>
-                                    </select>
-                                </div>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-xs font-semibold text-gray-500 mb-1">Date</label>
-                                        <input type="date" value={newObservationDate} onChange={e => setNewObservationDate(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none bg-white" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-semibold text-gray-500 mb-1">Réf</label>
-                                        <input value={newObservationRef} onChange={e => setNewObservationRef(e.target.value)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none bg-white" placeholder="OBS-..." />
-                                    </div>
-                                </div>
-                                <div className="grid grid-cols-2 gap-4 mt-2">
-                                    <div>
-                                        <label className="block text-[10px] font-bold text-blue-600 uppercase mb-1">Date envoi App.</label>
-                                        <input type="date" value={newApprovedSendDate} onChange={e => setNewApprovedSendDate(e.target.value)} className="w-full p-2 border border-blue-100 rounded focus:ring-2 focus:ring-blue-500 outline-none bg-blue-50/30 text-xs" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-[10px] font-bold text-blue-600 uppercase mb-1">Réf envoi App.</label>
-                                        <input value={newApprovedSendRef} onChange={e => setNewApprovedSendRef(e.target.value)} className="w-full p-2 border border-blue-100 rounded focus:ring-2 focus:ring-blue-500 outline-none bg-blue-50/30 text-xs" placeholder="Réf..." />
-                                    </div>
-                                </div>
-                                <div className="mt-2">
-                                    <label className="block text-xs font-semibold text-gray-500 mb-1">Pièces Jointes (Envoi App.)</label>
-                                    {newApprovedSendFiles.map((file, idx) => (
-                                        <div key={idx} className="flex items-center gap-2 text-xs bg-white border p-1 rounded mb-1">
-                                            <span className="truncate flex-1">Fichier {idx + 1}</span>
-                                            <button type="button" onClick={() => setAttachmentToDelete({ type: 'approval', index: idx })} className="text-red-500"><X size={12}/></button>
+                                
+                                <div className="space-y-4">
+                                    <div className="flex items-center gap-4">
+                                        <div className="flex-1">
+                                            <label className="block text-xs font-semibold text-gray-500 mb-1">Statut</label>
+                                            <select value={newStatus} onChange={e => setNewStatus(e.target.value as ApprovalStatus)} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none font-medium bg-white text-xs">
+                                                <option value={ApprovalStatus.APPROVED}>Approuvé</option>
+                                                <option value={ApprovalStatus.REJECTED}>Non Approuvé</option>
+                                                <option value={ApprovalStatus.NO_RESPONSE}>Sans réponse</option>
+                                                <option value={ApprovalStatus.PENDING}>En cours de révision</option>
+                                                <option value={ApprovalStatus.APPROVED_WITH_COMMENTS}>Approuvé (R)</option>
+                                            </select>
                                         </div>
-                                    ))}
-                                    {newApprovedSendFiles.length < 3 && (
-                                      <div className="relative mt-2">
-                                          <input type="file" id="approval-upload" className="hidden" onChange={(e) => handleModalFileChange(e, 'approval')} />
-                                          <label htmlFor="approval-upload" className="flex items-center justify-center gap-2 w-full p-2 border-2 border-dashed border-gray-300 rounded text-gray-500 hover:border-blue-500 hover:text-blue-500 cursor-pointer text-xs bg-white">
-                                              <UploadCloud size={14} /> Ajouter Fichier Approuvé
-                                          </label>
-                                      </div>
-                                    )}
-                                </div>
-                                <div>
-                                    <label className="block text-[10px] font-bold text-green-600 uppercase mb-1">Date de retour Approbation</label>
-                                    <input type="date" value={newApprovedReturnDate} onChange={e => setNewApprovedReturnDate(e.target.value)} className="w-full p-2 border border-green-100 rounded focus:ring-2 focus:ring-green-500 outline-none bg-green-50/30 text-xs" />
-                                </div>
-                                {/* File List Obs */}
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-500 mb-1">Fichiers Annotés (Visa)</label>
-                                    {newObservationFiles.map((file, idx) => (
-                                        <div key={idx} className="flex items-center gap-2 text-xs bg-white border p-1 rounded mb-1">
-                                            <span className="truncate flex-1">Note {idx + 1}</span>
-                                            <button type="button" onClick={() => setAttachmentToDelete({ type: 'observation', index: idx })} className="text-red-500"><X size={12}/></button>
-                                        </div>
-                                    ))}
-                                    {newObservationFiles.length < 3 && (
-                                      <div className="relative mt-2">
-                                          <input type="file" id="obs-upload" className="hidden" onChange={(e) => handleModalFileChange(e, 'observation')} />
-                                          <label htmlFor="obs-upload" className="flex items-center justify-center gap-2 w-full p-2 border-2 border-dashed border-gray-300 rounded text-gray-500 hover:border-amber-500 hover:text-amber-500 cursor-pointer text-xs bg-white">
-                                              <UploadCloud size={14} /> Ajouter Note/Visa
-                                          </label>
-                                      </div>
-                                    )}
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -2104,6 +2188,87 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                                   <option value={ApprovalStatus.REJECTED}>NON APPROUVÉ</option>
                                   <option value={ApprovalStatus.NO_RESPONSE}>SANS RÉPONSE</option>
                               </select>
+                          </div>
+
+                          <div className="mt-6 space-y-6 border-t border-gray-100 pt-6">
+                              <h4 className="text-xs font-black text-indigo-600 uppercase tracking-widest flex items-center gap-2">
+                                  <Paperclip size={14} /> Pièces Jointes & Synchronisation
+                              </h4>
+
+                              {/* Transmittal Files */}
+                              <div>
+                                  <label className="block text-[10px] font-bold uppercase text-gray-400 mb-2">Bordereaux d'Envoi (BE)</label>
+                                  <div className="space-y-1.5">
+                                      {(editSendForm.transmittalFiles || []).map((file, idx) => (
+                                          <div key={idx} className="flex items-center gap-2 text-xs bg-blue-50/50 border border-blue-100 p-2 rounded-lg group/file">
+                                              <FileText size={14} className="text-blue-500" />
+                                              <span className="truncate flex-1 font-medium text-blue-900">BE_{idx + 1}</span>
+                                              <div className="flex items-center gap-1">
+                                                  <button type="button" onClick={() => openFile(file)} className="p-1 text-blue-600 hover:bg-blue-100 rounded transition-colors"><FileIcon size={12}/></button>
+                                                  <button type="button" onClick={() => handleSpecificFileDelete('transmittal', idx)} className="p-1 text-red-500 hover:bg-red-100 rounded transition-colors"><X size={12}/></button>
+                                              </div>
+                                          </div>
+                                      ))}
+                                      {(editSendForm.transmittalFiles || []).length < 3 && (
+                                          <div className="relative">
+                                              <input type="file" id="specific-be-upload" className="hidden" onChange={(e) => handleSpecificFileChange(e, 'transmittal')} />
+                                              <label htmlFor="specific-be-upload" className="flex items-center justify-center gap-2 w-full p-2 border-2 border-dashed border-gray-200 rounded-lg text-gray-400 hover:border-blue-400 hover:text-blue-500 cursor-pointer text-[10px] font-bold uppercase bg-gray-50/50 transition-all">
+                                                  <UploadCloud size={14} /> Ajouter BE
+                                              </label>
+                                          </div>
+                                      )}
+                                  </div>
+                              </div>
+
+                              {/* Observation Files */}
+                              <div>
+                                  <label className="block text-[10px] font-bold uppercase text-gray-400 mb-2">Notes d'Observation / Visas</label>
+                                  <div className="space-y-1.5">
+                                      {(editSendForm.observationFiles || []).map((file, idx) => (
+                                          <div key={idx} className="flex items-center gap-2 text-xs bg-amber-50/50 border border-amber-100 p-2 rounded-lg group/file">
+                                              <FileText size={14} className="text-amber-500" />
+                                              <span className="truncate flex-1 font-medium text-amber-900">Note_{idx + 1}</span>
+                                              <div className="flex items-center gap-1">
+                                                  <button type="button" onClick={() => openFile(file)} className="p-1 text-amber-600 hover:bg-amber-100 rounded transition-colors"><FileIcon size={12}/></button>
+                                                  <button type="button" onClick={() => handleSpecificFileDelete('observation', idx)} className="p-1 text-red-500 hover:bg-red-100 rounded transition-colors"><X size={12}/></button>
+                                              </div>
+                                          </div>
+                                      ))}
+                                      {(editSendForm.observationFiles || []).length < 3 && (
+                                          <div className="relative">
+                                              <input type="file" id="specific-obs-upload" className="hidden" onChange={(e) => handleSpecificFileChange(e, 'observation')} />
+                                              <label htmlFor="specific-obs-upload" className="flex items-center justify-center gap-2 w-full p-2 border-2 border-dashed border-gray-200 rounded-lg text-gray-400 hover:border-amber-400 hover:text-amber-500 cursor-pointer text-[10px] font-bold uppercase bg-gray-50/50 transition-all">
+                                                  <UploadCloud size={14} /> Ajouter Note
+                                              </label>
+                                          </div>
+                                      )}
+                                  </div>
+                              </div>
+
+                              {/* Approval Files */}
+                              <div>
+                                  <label className="block text-[10px] font-bold uppercase text-gray-400 mb-2">Pièces Jointes Approuvées</label>
+                                  <div className="space-y-1.5">
+                                      {(editSendForm.approvalFiles || []).map((file, idx) => (
+                                          <div key={idx} className="flex items-center gap-2 text-xs bg-green-50/50 border border-green-100 p-2 rounded-lg group/file">
+                                              <FileText size={14} className="text-green-500" />
+                                              <span className="truncate flex-1 font-medium text-green-900">Approbation_{idx + 1}</span>
+                                              <div className="flex items-center gap-1">
+                                                  <button type="button" onClick={() => openFile(file)} className="p-1 text-green-600 hover:bg-green-100 rounded transition-colors"><FileIcon size={12}/></button>
+                                                  <button type="button" onClick={() => handleSpecificFileDelete('approval', idx)} className="p-1 text-red-500 hover:bg-red-100 rounded transition-colors"><X size={12}/></button>
+                                              </div>
+                                          </div>
+                                      ))}
+                                      {(editSendForm.approvalFiles || []).length < 3 && (
+                                          <div className="relative">
+                                              <input type="file" id="specific-app-upload" className="hidden" onChange={(e) => handleSpecificFileChange(e, 'approval')} />
+                                              <label htmlFor="specific-app-upload" className="flex items-center justify-center gap-2 w-full p-2 border-2 border-dashed border-gray-200 rounded-lg text-gray-400 hover:border-green-400 hover:text-green-500 cursor-pointer text-[10px] font-bold uppercase bg-gray-50/50 transition-all">
+                                                  <UploadCloud size={14} /> Ajouter Fichier
+                                              </label>
+                                          </div>
+                                      )}
+                                  </div>
+                              </div>
                           </div>
                       </div>
                   </div>
