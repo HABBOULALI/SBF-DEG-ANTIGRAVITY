@@ -11,6 +11,10 @@ function doPost(e) {
       return jsonResponse(deleteFileFromDrive_(payload));
     }
 
+    if (action === 'sendScheduledDocumentEmail') {
+      return jsonResponse(sendScheduledDocumentEmail_(payload));
+    }
+
     return jsonResponse({
       success: false,
       error: 'Action non supportee.',
@@ -52,6 +56,48 @@ function deleteFileFromDrive_(payload) {
     success: true,
     fileId: payload.fileId,
   };
+}
+
+function sendScheduledDocumentEmail_(payload) {
+  if (!payload.to) {
+    throw new Error('Destinataire email manquant.');
+  }
+
+  if (!payload.subject) {
+    throw new Error('Sujet email manquant.');
+  }
+
+  var attachments = buildMailAttachments_(payload.attachments || []);
+
+  MailApp.sendEmail({
+    to: payload.to,
+    subject: payload.subject,
+    body: payload.body || 'Veuillez consulter le tableau de suivi des documents.',
+    htmlBody: payload.htmlBody || undefined,
+    attachments: attachments,
+    name: 'SBF GED'
+  });
+
+  return {
+    success: true,
+    to: payload.to,
+    subject: payload.subject
+  };
+}
+
+function buildMailAttachments_(items) {
+  if (!items || !items.length) {
+    return [];
+  }
+
+  return items.map(function(item) {
+    var bytes = Utilities.base64Decode(item.contentBase64 || '');
+    return Utilities.newBlob(
+      bytes,
+      item.mimeType || 'application/octet-stream',
+      item.fileName || 'piece-jointe.bin'
+    );
+  });
 }
 
 function ensureFolderPath_(rootFolder, folderPath) {

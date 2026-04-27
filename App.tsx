@@ -4,12 +4,15 @@ import { DocumentList } from './components/DocumentList';
 import { BordereauView } from './components/BordereauView';
 import { SettingsView } from './components/SettingsView';
 import { Dashboard } from './components/Dashboard';
-import { BTPDocument, ApprovalStatus } from './types';
+import { BTPDocument, ApprovalStatus, AppSettings } from './types';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from './context/AuthContext';
 import { Login } from './components/Login';
 import { firestoreService } from './services/firestoreService';
 import toast, { Toaster } from 'react-hot-toast';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db } from './services/firebase';
+import { emailSchedulerService } from './services/emailSchedulerService';
 
 const INITIAL_DOCS: BTPDocument[] = [
   {
@@ -96,6 +99,7 @@ export default function App() {
       const saved = localStorage.getItem('sbf-theme');
       return (saved as 'light' | 'dark') || 'dark';
   });
+  const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
 
   useEffect(() => {
       document.documentElement.classList.remove('light', 'dark');
@@ -107,6 +111,28 @@ export default function App() {
 
   const [documents, setDocuments] = useState<BTPDocument[]>([]);
   const [isInitialized, setIsInitialized] = useState(false);
+
+  useEffect(() => {
+      if (!user) {
+          return;
+      }
+
+      const unsubscribe = onSnapshot(doc(db, 'config', 'app_settings'), (snapshot) => {
+          if (snapshot.exists()) {
+              const data = snapshot.data() as AppSettings;
+              setAppSettings(data);
+              localStorage.setItem('btp-app-settings', JSON.stringify(data));
+          } else {
+              const saved = localStorage.getItem('btp-app-settings');
+              setAppSettings(saved ? JSON.parse(saved) : null);
+          }
+      }, () => {
+          const saved = localStorage.getItem('btp-app-settings');
+          setAppSettings(saved ? JSON.parse(saved) : null);
+      });
+
+      return () => unsubscribe();
+  }, [user]);
 
   useEffect(() => {
       // If we aren't logged in, don't try to fetch
@@ -149,6 +175,41 @@ export default function App() {
           localStorage.setItem('btp-docs', JSON.stringify(documents));
       }
   }, [documents, isInitialized]);
+
+  useEffect(() => {
+      if (!user || !isInitialized || !appSettings) {
+          return;
+      }
+
+      let cancelled = false;
+
+      const processScheduledEmails = async () => {
+          try {
+              const result = await emailSchedulerService.processPendingScheduledEmails({
+                  settings: appSettings,
+                  documents,
+                  runnerId: user.uid,
+              });
+
+              if (!cancelled && result.attempted && result.sentCount > 0) {
+                  toast.success(`${result.sentCount} email(s) planifie(s) envoye(s).`);
+              }
+          } catch (error) {
+              console.error('Scheduled email error:', error);
+              if (!cancelled) {
+                  toast.error("Erreur lors de l'envoi automatique des emails.");
+              }
+          }
+      };
+
+      processScheduledEmails();
+      const intervalId = window.setInterval(processScheduledEmails, 60 * 1000);
+
+      return () => {
+          cancelled = true;
+          window.clearInterval(intervalId);
+      };
+  }, [user, isInitialized, appSettings, documents]);
 
   const addDocument = async (doc: BTPDocument) => {
     // Optimistic UI update
@@ -250,7 +311,12 @@ export default function App() {
             setSelectedDocs={setBordereauSelectedDocs}
         />;
       case 'settings':
-        return <SettingsView />;
+        return (
+          <SettingsView
+            documents={documents}
+            appSettings={appSettings}
+          />
+        );
       default:
         return <Dashboard documents={documents} onNavigateToDocs={handleNavigateToDocs} />;
     }

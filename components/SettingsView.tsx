@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Save, Building, FileText, MapPin, Phone, Upload, Image as ImageIcon, Trash2, Check, Users, Plus, X, Database, Link, AlertTriangle, AlertCircle, Play, CheckCircle2, XCircle, Loader2, UserPlus, Shield, Mail, KeyRound, Search, UserCog } from 'lucide-react';
+import { Save, FileText, Upload, Image as ImageIcon, Trash2, Users, Plus, X, Database, AlertCircle, Loader2, UserPlus, Mail, KeyRound, Search, UserCog, BellRing } from 'lucide-react';
 import { Logo } from './Logo';
 import { useAuth, UserRole } from '../context/AuthContext';
 import { db, firebaseConfig } from '../services/firebase';
@@ -7,32 +7,8 @@ import { collection, doc, getDocs, setDoc, updateDoc, onSnapshot, query, orderBy
 import { initializeApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import toast from 'react-hot-toast';
-
-interface Stakeholder {
-    name: string;
-    contacts: string[];
-}
-
-interface AppSettings {
-    companyName: string;
-    companySubtitle: string;
-    projectCode: string;
-    projectName: string;
-    address: string;
-    contact: string;
-    defaultValidator: string;
-    logoMDO?: string;
-    documentNatures: string[];
-    stakeholders: {
-        client: Stakeholder;
-        consultant: Stakeholder;
-        control: Stakeholder;
-    };
-    recipients: Stakeholder[];
-    senders: string[];
-    googleDriveScriptUrl?: string;
-    googleDriveRootFolderId?: string;
-}
+import { AppSettings, ApprovalStatus, BTPDocument, ScheduledDocumentEmailRule, ScheduledDocumentEmailSettings } from '../types';
+import { emailSchedulerService } from '../services/emailSchedulerService';
 
 interface UserData {
     uid: string;
@@ -41,11 +17,100 @@ interface UserData {
     createdAt?: string;
 }
 
-export const SettingsView: React.FC = () => {
+const dayOptions = [
+    { value: 'MONDAY', label: 'Lundi' },
+    { value: 'TUESDAY', label: 'Mardi' },
+    { value: 'WEDNESDAY', label: 'Mercredi' },
+    { value: 'THURSDAY', label: 'Jeudi' },
+    { value: 'FRIDAY', label: 'Vendredi' },
+    { value: 'SATURDAY', label: 'Samedi' },
+    { value: 'SUNDAY', label: 'Dimanche' }
+];
+
+const statusOptions: Array<{ value: ApprovalStatus; label: string }> = [
+    { value: ApprovalStatus.PENDING, label: 'En cours de revision' },
+    { value: ApprovalStatus.APPROVED, label: 'Approuve' },
+    { value: ApprovalStatus.APPROVED_WITH_COMMENTS, label: 'Approuve (R)' },
+    { value: ApprovalStatus.REJECTED, label: 'Non approuve' },
+    { value: ApprovalStatus.NO_RESPONSE, label: 'Sans reponse' }
+];
+
+const createScheduledRule = (user: Pick<UserData, 'uid' | 'email'> | string): ScheduledDocumentEmailRule => ({
+    userUid: typeof user === 'string' ? '' : user.uid,
+    userEmail: typeof user === 'string' ? user : user.email,
+    enabled: false,
+    includeStatuses: [],
+    excludeStatuses: [],
+    customSubject: `Tableau de suivi - ${typeof user === 'string' ? user : user.email}`,
+    customMessage: `Veuillez trouver ci-joint le tableau de suivi des documents destine a ${typeof user === 'string' ? user : user.email}.`
+});
+
+const defaultScheduledDocumentEmailSettings = (users: Array<Pick<UserData, 'uid' | 'email'> | string> = []): ScheduledDocumentEmailSettings => ({
+    enabled: false,
+    dayOfWeek: 'MONDAY',
+    time: '08:00',
+    timezone: 'Africa/Tunis',
+    rules: users.map(createScheduledRule)
+});
+
+const createDefaultSettings = (): AppSettings => ({
+    companyName: 'SociÃ©tÃ© Bouzguenda FrÃ¨res',
+    companySubtitle: 'Entreprise GÃ©nÃ©rale de BÃ¢timents',
+    projectCode: 'PRJ-2024-HZ',
+    projectName: 'Construction SiÃ¨ge Horizon',
+    address: '41 Rue 8600 ZI La Charguia 1. Tunis',
+    contact: 'TÃ©l. : 70 557 900 - Fax : 70 557 999',
+    defaultValidator: 'Bureau de ContrÃ´le',
+    logo: '',
+    logoMDO: '',
+    documentNatures: ['Plans', 'Notes de calcul', 'Fiches Techniques', 'Documents Administratifs'],
+    stakeholders: {
+        client: { name: 'MaÃ®tre d\'Ouvrage', contacts: ['M. Le Directeur Technique'] },
+        consultant: { name: 'Bureau d\'Ã‰tudes Structure', contacts: ['M. L\'IngÃ©nieur Conseil'] },
+        control: { name: 'Bureau de ContrÃ´le', contacts: ['M. Le ContrÃ´leur Technique'] }
+    },
+    recipients: [
+        { name: 'MaÃ®tre d\'Ouvrage', contacts: ['Directeur Technique'] },
+        { name: 'Bureau de ContrÃ´le', contacts: ['ContrÃ´leur Technique'] }
+    ],
+    senders: ['Directeur de Projet', 'Chef de Chantier', 'IngÃ©nieur MÃ©thodes'],
+    googleDriveScriptUrl: '',
+    googleDriveRootFolderId: '',
+    scheduledDocumentEmailSettings: defaultScheduledDocumentEmailSettings()
+  });
+
+const mergeSettingsWithDefaults = (incoming?: Partial<AppSettings>): AppSettings => {
+    const defaults = createDefaultSettings();
+    const incomingScheduled = incoming?.scheduledDocumentEmailSettings;
+
+    return {
+        ...defaults,
+        ...incoming,
+        stakeholders: {
+            ...defaults.stakeholders,
+            ...(incoming?.stakeholders || {})
+        },
+        recipients: incoming?.recipients || defaults.recipients,
+        senders: incoming?.senders || defaults.senders,
+        documentNatures: incoming?.documentNatures || defaults.documentNatures,
+        scheduledDocumentEmailSettings: {
+            ...defaultScheduledDocumentEmailSettings(),
+            ...(incomingScheduled || {}),
+            rules: incomingScheduled?.rules || []
+        }
+    };
+};
+
+interface SettingsViewProps {
+  documents?: BTPDocument[];
+  appSettings?: AppSettings | null;
+}
+
+export const SettingsView: React.FC<SettingsViewProps> = ({ documents = [], appSettings: externalAppSettings }) => {
   const { user: currentUser } = useAuth();
   const isAdmin = currentUser?.role === 'admin';
   
-  const [activeTab, setActiveTab] = useState<'general' | 'users'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'emails' | 'users'>('general');
   const [settings, setSettings] = useState<AppSettings>({
     companyName: 'Société Bouzguenda Frères',
     companySubtitle: 'Entreprise Générale de Bâtiments',
@@ -69,7 +134,11 @@ export const SettingsView: React.FC = () => {
     senders: ['Directeur de Projet', 'Chef de Chantier', 'Ingénieur Méthodes']
     ,
     googleDriveScriptUrl: '',
-    googleDriveRootFolderId: ''
+    googleDriveRootFolderId: '',
+    scheduledDocumentEmailSettings: defaultScheduledDocumentEmailSettings([
+        'MaÃ®tre d\'Ouvrage',
+        'Bureau de ContrÃ´le'
+    ])
   });
 
   const [selectedRecipientIdx, setSelectedRecipientIdx] = useState<number | null>(null);
@@ -79,6 +148,7 @@ export const SettingsView: React.FC = () => {
   const [newRecipient, setNewRecipient] = useState('');
   const [newSender, setNewSender] = useState('');
   const [loading, setLoading] = useState(false);
+  const [testingRuleUid, setTestingRuleUid] = useState<string | null>(null);
   const [users, setUsers] = useState<UserData[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -109,11 +179,11 @@ export const SettingsView: React.FC = () => {
                 if (!data.documentNatures) {
                     data.documentNatures = ['Plans', 'Notes de calcul', 'Fiches Techniques', 'Documents Administratifs'];
                 }
-                setSettings(data);
+                setSettings(mergeSettingsWithDefaults(data));
             } else {
                 // If not in Firestore, try local as backup
                 const saved = localStorage.getItem('btp-app-settings');
-                if (saved) setSettings(JSON.parse(saved));
+                if (saved) setSettings(mergeSettingsWithDefaults(JSON.parse(saved)));
             }
         });
         return () => unsubscribe();
@@ -123,7 +193,7 @@ export const SettingsView: React.FC = () => {
 
   // Load Users from Firestore
   useEffect(() => {
-    if (activeTab === 'users' && isAdmin) {
+    if ((activeTab === 'users' || activeTab === 'emails') && isAdmin) {
         setUsersLoading(true);
         const q = query(collection(db, 'users'), orderBy('email'));
         const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -242,6 +312,65 @@ export const SettingsView: React.FC = () => {
 
   const addContact = (type: 'client' | 'consultant' | 'control') => {
       // Logic remained the same
+  };
+
+  const updateScheduledEmailSettings = (
+      field: keyof ScheduledDocumentEmailSettings,
+      value: boolean | string | ScheduledDocumentEmailRule[]
+  ) => {
+      setSettings(prev => {
+          const current = prev.scheduledDocumentEmailSettings || defaultScheduledDocumentEmailSettings();
+          return {
+              ...prev,
+              scheduledDocumentEmailSettings: {
+                  ...current,
+                  [field]: value
+              }
+          };
+      });
+  };
+
+  const updateScheduledRule = (
+      userUid: string,
+      field: keyof ScheduledDocumentEmailRule,
+      value: boolean | string | ApprovalStatus[]
+  ) => {
+      setSettings(prev => {
+          const current = prev.scheduledDocumentEmailSettings || defaultScheduledDocumentEmailSettings();
+          const userList = users.map((user) => ({ uid: user.uid, email: user.email }));
+          const existingRules = userList.map((user) => {
+              const existingRule = current.rules.find((rule) => rule.userUid === user.uid || rule.userEmail === user.email);
+              return existingRule ? { ...existingRule, userUid: user.uid, userEmail: user.email } : createScheduledRule(user);
+          });
+          const rules = existingRules.map((rule) =>
+              rule.userUid === userUid ? { ...rule, [field]: value } : rule
+          );
+
+          return {
+              ...prev,
+              scheduledDocumentEmailSettings: {
+                  ...current,
+                  rules
+              }
+          };
+      });
+  };
+
+  const handleTestScheduledRule = async (rule: ScheduledDocumentEmailRule) => {
+      setTestingRuleUid(rule.userUid);
+      try {
+          await emailSchedulerService.sendTestEmailForRule({
+              settings: externalAppSettings || settings,
+              documents,
+              rule,
+          });
+          toast.success(`Email de test envoye a ${rule.userEmail}.`);
+      } catch (error: any) {
+          console.error(error);
+          toast.error(error?.message || "Erreur lors de l'envoi du test.");
+      } finally {
+          setTestingRuleUid(null);
+      }
   };
 
   const renderGeneralTab = () => (
@@ -694,6 +823,259 @@ export const SettingsView: React.FC = () => {
     </div>
   );
 
+  const renderEmailsTab = () => {
+    const emailUsers = users.map((user) => ({ uid: user.uid, email: user.email }));
+    const emailSettings = settings.scheduledDocumentEmailSettings || defaultScheduledDocumentEmailSettings(emailUsers);
+    const rules = emailUsers.map((user) => {
+        const existingRule = emailSettings.rules.find((rule) => rule.userUid === user.uid || rule.userEmail === user.email);
+        return existingRule ? { ...existingRule, userUid: user.uid, userEmail: user.email } : createScheduledRule(user);
+    });
+
+    return (
+        <div className="space-y-6 animate-in fade-in duration-300">
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-900/30 p-4 rounded-xl">
+                <p className="text-[13px] text-amber-800 dark:text-amber-200">
+                    Parametrez ici l'envoi automatique hebdomadaire du tableau de suivi. Chaque regle est rattachee a l'adresse email d'un utilisateur enregistre dans la gestion des utilisateurs.
+                </p>
+            </div>
+
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 transition-colors space-y-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                        <div className="flex items-center gap-3">
+                            <BellRing size={18} className="text-blue-600 dark:text-blue-400" />
+                            <h3 className="text-base font-semibold text-gray-800 dark:text-slate-200">Planification hebdomadaire</h3>
+                        </div>
+                        <p className="text-xs text-gray-500 dark:text-slate-400 mt-2">
+                            Activez l'envoi automatique puis choisissez le jour et l'heure d'execution du tableau de suivi.
+                        </p>
+                    </div>
+
+                    <label className="inline-flex items-center gap-3 cursor-pointer">
+                        <span className={`text-xs font-bold uppercase tracking-wider ${emailSettings.enabled ? 'text-green-600 dark:text-green-400' : 'text-slate-400'}`}>
+                            {emailSettings.enabled ? 'Planifie' : 'Desactive'}
+                        </span>
+                        <button
+                            type="button"
+                            onClick={() => updateScheduledEmailSettings('enabled', !emailSettings.enabled)}
+                            className={`w-14 h-8 rounded-full transition-colors relative ${emailSettings.enabled ? 'bg-green-500' : 'bg-slate-300 dark:bg-slate-700'}`}
+                        >
+                            <span className={`absolute top-1 h-6 w-6 rounded-full bg-white transition-transform ${emailSettings.enabled ? 'translate-x-7' : 'translate-x-1'}`} />
+                        </button>
+                    </label>
+                </div>
+
+                <div className="space-y-2">
+                    <label className="block text-[11px] font-bold text-gray-500 dark:text-slate-400 uppercase">URL du script d'envoi email</label>
+                    <input
+                        type="text"
+                        name="emailScriptUrl"
+                        value={settings.emailScriptUrl || ''}
+                        onChange={handleChange}
+                        className="w-full p-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-[13px] transition-colors"
+                        placeholder="https://script.google.com/macros/s/.../exec"
+                    />
+                    <p className="text-[11px] text-slate-400">
+                        Cette URL sera utilisee pour l'envoi des emails planifies. Si elle est vide, l'application reutilise l'URL Google Drive existante.
+                    </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                        <label className="block text-[11px] font-bold text-gray-500 dark:text-slate-400 uppercase">Jour d'envoi</label>
+                        <select
+                            value={emailSettings.dayOfWeek}
+                            onChange={(e) => updateScheduledEmailSettings('dayOfWeek', e.target.value)}
+                            className="w-full p-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-[13px] transition-colors"
+                        >
+                            {dayOptions.map((day) => (
+                                <option key={day.value} value={day.value}>{day.label}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="block text-[11px] font-bold text-gray-500 dark:text-slate-400 uppercase">Heure d'envoi</label>
+                        <input
+                            type="time"
+                            value={emailSettings.time}
+                            onChange={(e) => updateScheduledEmailSettings('time', e.target.value)}
+                            className="w-full p-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-[13px] transition-colors"
+                        />
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="block text-[11px] font-bold text-gray-500 dark:text-slate-400 uppercase">Fuseau horaire</label>
+                        <input
+                            type="text"
+                            value={emailSettings.timezone}
+                            onChange={(e) => updateScheduledEmailSettings('timezone', e.target.value)}
+                            className="w-full p-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-[13px] transition-colors"
+                            placeholder="Africa/Tunis"
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {usersLoading && (
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 text-sm text-slate-500 dark:text-slate-400">
+                    Chargement des utilisateurs...
+                </div>
+            )}
+
+            {!usersLoading && rules.length === 0 && (
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 text-sm text-slate-500 dark:text-slate-400">
+                    Aucun utilisateur enregistre. Creez d'abord les comptes dans l'onglet gestion des utilisateurs.
+                </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-5">
+                {rules.map((rule) => (
+                    <div key={rule.userUid || rule.userEmail} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 transition-colors space-y-5">
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                            <div>
+                                <div className="flex items-center gap-3">
+                                    <Mail size={18} className="text-blue-600 dark:text-blue-400" />
+                                    <h3 className="text-base font-semibold text-gray-800 dark:text-slate-200">{rule.userEmail}</h3>
+                                </div>
+                                <p className="text-xs text-gray-500 dark:text-slate-400 mt-2">
+                                    Choisissez quels statuts doivent apparaitre dans le tableau envoye a cet utilisateur.
+                                </p>
+                            </div>
+
+                            <label className="inline-flex items-center gap-3 cursor-pointer">
+                                <span className={`text-xs font-bold uppercase tracking-wider ${rule.enabled ? 'text-green-600 dark:text-green-400' : 'text-slate-400'}`}>
+                                    {rule.enabled ? 'Active' : 'Inactive'}
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => updateScheduledRule(rule.userUid, 'enabled', !rule.enabled)}
+                                    className={`w-14 h-8 rounded-full transition-colors relative ${rule.enabled ? 'bg-green-500' : 'bg-slate-300 dark:bg-slate-700'}`}
+                                >
+                                    <span className={`absolute top-1 h-6 w-6 rounded-full bg-white transition-transform ${rule.enabled ? 'translate-x-7' : 'translate-x-1'}`} />
+                                </button>
+                            </label>
+                        </div>
+
+                        <div className="flex justify-end">
+                            <button
+                                type="button"
+                                onClick={() => handleTestScheduledRule(rule)}
+                                disabled={testingRuleUid === rule.userUid || !rule.enabled}
+                                className="px-4 py-2 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 text-xs font-bold hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors disabled:opacity-50"
+                            >
+                                {testingRuleUid === rule.userUid ? 'Envoi du test...' : "Envoyer un test"}
+                            </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <div className="space-y-3">
+                                <label className="block text-[11px] font-bold text-gray-500 dark:text-slate-400 uppercase">Statuts a inclure</label>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                    {statusOptions.map((status) => {
+                                        const checked = rule.includeStatuses.includes(status.value);
+                                        return (
+                                            <label
+                                                key={`${rule.userUid}-include-${status.value}`}
+                                                className={`flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                                                    checked
+                                                        ? 'border-green-300 bg-green-50 dark:border-green-800 dark:bg-green-900/20'
+                                                        : 'border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50'
+                                                }`}
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    onChange={(e) => {
+                                                        const next = e.target.checked
+                                                            ? [...rule.includeStatuses, status.value]
+                                                            : rule.includeStatuses.filter((item) => item !== status.value);
+                                                        updateScheduledRule(rule.userUid, 'includeStatuses', next);
+                                                    }}
+                                                    className="rounded border-slate-300 text-green-600 focus:ring-green-500"
+                                                />
+                                                <span className="text-[13px] text-gray-700 dark:text-slate-200">{status.label}</span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                                <p className="text-[11px] text-slate-400">
+                                    Si aucun statut n'est coche, tous les statuts sont consideres avant exclusion.
+                                </p>
+                            </div>
+
+                            <div className="space-y-3">
+                                <label className="block text-[11px] font-bold text-gray-500 dark:text-slate-400 uppercase">Statuts a exclure</label>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                    {statusOptions.map((status) => {
+                                        const checked = rule.excludeStatuses.includes(status.value);
+                                        return (
+                                            <label
+                                                key={`${rule.userUid}-exclude-${status.value}`}
+                                                className={`flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                                                    checked
+                                                        ? 'border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/20'
+                                                        : 'border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50'
+                                                }`}
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    onChange={(e) => {
+                                                        const next = e.target.checked
+                                                            ? [...rule.excludeStatuses, status.value]
+                                                            : rule.excludeStatuses.filter((item) => item !== status.value);
+                                                        updateScheduledRule(rule.userUid, 'excludeStatuses', next);
+                                                    }}
+                                                    className="rounded border-slate-300 text-red-600 focus:ring-red-500"
+                                                />
+                                                <span className="text-[13px] text-gray-700 dark:text-slate-200">{status.label}</span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                                <p className="text-[11px] text-slate-400">
+                                    Exemple: pour le Maitre d'Ouvrage, cochez seulement `Sans reponse` en exclusion pour envoyer tous les autres statuts.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label className="block text-[11px] font-bold text-gray-500 dark:text-slate-400 uppercase">Objet de l'email</label>
+                                <input
+                                    type="text"
+                                    value={rule.customSubject}
+                                    onChange={(e) => updateScheduledRule(rule.userUid, 'customSubject', e.target.value)}
+                                    className="w-full p-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-[13px] transition-colors"
+                                    placeholder="Objet du tableau de suivi"
+                                />
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="block text-[11px] font-bold text-gray-500 dark:text-slate-400 uppercase">Message d'accompagnement</label>
+                                <textarea
+                                    value={rule.customMessage}
+                                    onChange={(e) => updateScheduledRule(rule.userUid, 'customMessage', e.target.value)}
+                                    rows={3}
+                                    className="w-full p-3 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-lg text-[13px] transition-colors resize-y"
+                                    placeholder="Message ajoute a l'email automatique"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            <div className="pt-2 flex justify-end">
+                <button onClick={handleSave} disabled={loading} className="bg-blue-600 text-white px-6 py-2.5 rounded-lg flex items-center gap-2 hover:bg-blue-700 font-bold transition-all shadow-md active:scale-95 disabled:opacity-50">
+                    {loading ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />} Enregistrer tout
+                </button>
+            </div>
+        </div>
+    );
+  };
+
   return (
     <div className="max-w-5xl mx-auto space-y-6 mb-20 p-4">
         {/* TAB NAVIGATION */}
@@ -703,6 +1085,12 @@ export const SettingsView: React.FC = () => {
                 className={`py-4 px-1 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === 'general' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
             >
                 <Database size={18} /> Configuration Globale
+            </button>
+            <button 
+                onClick={() => setActiveTab('emails')}
+                className={`py-4 px-1 text-sm font-bold flex items-center gap-2 border-b-2 transition-all ${activeTab === 'emails' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+            >
+                <Mail size={18} /> Emails par Statut
             </button>
             {isAdmin && (
                 <button 
@@ -714,7 +1102,9 @@ export const SettingsView: React.FC = () => {
             )}
         </div>
 
-        {activeTab === 'general' ? renderGeneralTab() : renderUsersTab()}
+        {activeTab === 'general' && renderGeneralTab()}
+        {activeTab === 'emails' && renderEmailsTab()}
+        {activeTab === 'users' && renderUsersTab()}
 
         {/* MODAL CREATION UTILISATEUR */}
         {isAddModalOpen && (

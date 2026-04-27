@@ -6,6 +6,69 @@ export enum ApprovalStatus {
   NO_RESPONSE = 'NO_RESPONSE'
 }
 
+export interface Stakeholder {
+  name: string;
+  contacts: string[];
+}
+
+export interface StatusEmailRule {
+  enabled: boolean;
+  subject: string;
+  message: string;
+  recipients: string[];
+}
+
+export interface StatusEmailSettings {
+  APPROVED: StatusEmailRule;
+  APPROVED_WITH_COMMENTS: StatusEmailRule;
+  REJECTED: StatusEmailRule;
+  NO_RESPONSE: StatusEmailRule;
+  PENDING: StatusEmailRule;
+}
+
+export interface ScheduledDocumentEmailRule {
+  userUid: string;
+  userEmail: string;
+  enabled: boolean;
+  includeStatuses: ApprovalStatus[];
+  excludeStatuses: ApprovalStatus[];
+  customSubject: string;
+  customMessage: string;
+}
+
+export interface ScheduledDocumentEmailSettings {
+  enabled: boolean;
+  dayOfWeek: string;
+  time: string;
+  timezone: string;
+  rules: ScheduledDocumentEmailRule[];
+}
+
+export interface AppSettings {
+  companyName: string;
+  companySubtitle: string;
+  projectCode: string;
+  projectName: string;
+  address: string;
+  contact: string;
+  defaultValidator: string;
+  logo?: string;
+  logoMDO?: string;
+  documentNatures: string[];
+  stakeholders: {
+    client: Stakeholder;
+    consultant: Stakeholder;
+    control: Stakeholder;
+  };
+  recipients: Stakeholder[];
+  senders: string[];
+  googleDriveScriptUrl?: string;
+  emailScriptUrl?: string;
+  googleDriveRootFolderId?: string;
+  statusEmailSettings?: StatusEmailSettings;
+  scheduledDocumentEmailSettings?: ScheduledDocumentEmailSettings;
+}
+
 export interface ReminderConfig {
   active: boolean;
   frequencyDays: number; // e.g., 3, 7
