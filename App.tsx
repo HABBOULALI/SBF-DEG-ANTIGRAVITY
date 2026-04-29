@@ -263,6 +263,14 @@ export default function App() {
       setActiveTab('documents');
   };
 
+  const handleSetActiveTab = (tab: string) => {
+    // Réinitialiser le filtre quand on navigue via le menu (pas depuis le Dashboard)
+    if (tab === 'documents') {
+      setInitialDocFilter('ALL');
+    }
+    setActiveTab(tab);
+  };
+
   const handleAddToBordereau = (docId: string) => {
       if (user?.role === 'viewer') {
           toast.error("Action non autorisée pour votre profil.");
@@ -336,7 +344,7 @@ export default function App() {
   }
 
   return (
-    <Layout activeTab={activeTab} setActiveTab={setActiveTab} theme={theme} onToggleTheme={toggleTheme}>
+    <Layout activeTab={activeTab} setActiveTab={handleSetActiveTab} theme={theme} onToggleTheme={toggleTheme}>
       <Toaster 
           position="bottom-right" 
           toastOptions={{

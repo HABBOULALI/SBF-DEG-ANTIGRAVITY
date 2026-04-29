@@ -1268,32 +1268,110 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet('Suivi Documents');
 
-      // Headers
+      // Configuration des colonnes (largeurs et clés)
       sheet.columns = [
-        { header: 'N°', key: 'num', width: 5 },
-        { header: 'Lot', key: 'lot', width: 6 },
-        { header: 'Poste', key: 'poste', width: 8 },
-        { header: 'Type', key: 'type', width: 6 },
-        { header: 'CODE', key: 'code', width: 20 },
-        { header: 'Indice', key: 'index', width: 8 },
-        { header: 'Désignation', key: 'name', width: 40 },
-        { header: 'Date Envoi', key: 'transmittalDate', width: 12 },
-        { header: 'Réf Envoi', key: 'transmittalRef', width: 15 },
-        { header: 'Date Obs.', key: 'observationDate', width: 12 },
-        { header: 'Réf Obs.', key: 'observationRef', width: 15 },
-        { header: 'Statut', key: 'status', width: 18 },
-        { header: 'Destinataire', key: 'recipient', width: 15 },
-        { header: 'Date Envoi App.', key: 'approvedSendDate', width: 14 },
-        { header: 'Réf Envoi App.', key: 'approvedSendRef', width: 15 },
-        { header: 'Ret. App.', key: 'approvedReturnDate', width: 12 },
+        { key: 'num', width: 5 },
+        { key: 'lot', width: 6 },
+        { key: 'poste', width: 8 },
+        { key: 'type', width: 6 },
+        { key: 'code', width: 25 },
+        { key: 'index', width: 8 },
+        { key: 'name', width: 45 },
+        { key: 'transmittalDate', width: 12 },
+        { key: 'transmittalRef', width: 15 },
+        { key: 'observationDate', width: 12 },
+        { key: 'observationRef', width: 15 },
+        { key: 'status', width: 18 },
+        { key: 'recipient', width: 15 },
+        { key: 'approvedSendDate', width: 14 },
+        { key: 'approvedSendRef', width: 15 },
+        { key: 'approvedReturnDate', width: 12 },
       ];
 
-      // Style header row
-      const headerRow = sheet.getRow(1);
-      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 9 };
-      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
-      headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
-      headerRow.height = 24;
+      // --- CRÉATION DE L'ENTÊTE (3 CASES) ---
+      // 1. Fusion des cellules pour les 3 zones
+      sheet.mergeCells('A1:C5'); // Zone Logo gauche
+      sheet.mergeCells('D1:M5'); // Zone Titre centre
+      sheet.mergeCells('N1:P5'); // Zone Admin droite
+
+      // 2. Style et contenu de la zone Titre (Centre)
+      const titleCell = sheet.getCell('D1');
+      titleCell.value = {
+        richText: [
+          { text: `${appSettings.companyName}\n`, font: { name: 'Times New Roman', bold: true, size: 14, color: { argb: 'FF1E293B' } } },
+          { text: 'TABLEAU DE SUIVI DES DOCUMENTS\n', font: { name: 'Times New Roman', bold: true, size: 18, underline: true, color: { argb: 'FF0F172A' } } },
+          { text: `${appSettings.projectName} (${appSettings.projectCode})\n`, font: { name: 'Times New Roman', bold: true, size: 12, color: { argb: 'FF334155' } } },
+          { text: `Édité le : ${new Date().toLocaleDateString('fr-FR')}`, font: { name: 'Times New Roman', size: 10, italic: true, color: { argb: 'FF64748B' } } },
+        ]
+      };
+      titleCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+
+      // 3. Style et contenu de la zone Admin (Droite)
+      const adminCell = sheet.getCell('N1');
+      adminCell.value = 'CADRE RÉSERVÉ\nADMINISTRATION';
+      adminCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      adminCell.font = { name: 'Times New Roman', bold: true, size: 9, color: { argb: 'FF94A3B8' } };
+      adminCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+
+      // 4. Bordures pour les cases d'entête
+      ['A1', 'D1', 'N1'].forEach(ref => {
+        const cell = sheet.getCell(ref);
+        cell.border = {
+          top: { style: 'medium' },
+          left: { style: 'medium' },
+          bottom: { style: 'medium' },
+          right: { style: 'medium' }
+        };
+      });
+
+      // 5. Ajout des Logos (si présents en base64)
+      const addLogo = (logoData: string, tlCol: number, brCol: number) => {
+        if (logoData && logoData.startsWith('data:image')) {
+          try {
+            const base64Data = logoData.split(',')[1];
+            const mimeType = logoData.split(';')[0].split(':')[1];
+            let extension: 'png' | 'jpeg' | 'gif' = 'png';
+            if (mimeType.includes('jpeg')) extension = 'jpeg';
+            else if (mimeType.includes('gif')) extension = 'gif';
+
+            const imageId = workbook.addImage({
+              base64: base64Data,
+              extension: extension,
+            });
+            sheet.addImage(imageId, {
+              tl: { col: tlCol, row: 0.1 },
+              br: { col: brCol, row: 4.9 },
+              editAs: 'oneCell'
+            });
+          } catch (e) {
+            console.error("Erreur logo Excel:", e);
+          }
+        }
+      };
+
+      addLogo(appSettings.logo, 0, 3); // Logo SBF à gauche (A-C)
+      addLogo(appSettings.logoMDO, 13, 16); // Logo MDO à droite (N-P)
+
+      // --- LIGNE D'ENTÊTE DU TABLEAU (Ligne 7) ---
+      const headerRow = sheet.getRow(7);
+      headerRow.values = [
+        'N°', 'Lot', 'Poste', 'Type', 'CODE DOCUMENT', 'INDICE', 'DÉSIGNATION DU DOCUMENT', 
+        'DATE ENVOI', 'RÉF ENVOI', 'DATE OBS.', 'RÉF OBS.', 
+        'STATUT', 'DESTINATAIRE', 'DATE ENVOI APP.', 'RÉF ENVOI APP.', 'RET. APP.'
+      ];
+      
+      headerRow.eachCell((cell) => {
+        cell.font = { name: 'Times New Roman', bold: true, color: { argb: 'FFFFFFFF' }, size: 9 };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' }
+        };
+      });
+      headerRow.height = 30;
 
       const statusLabel = (s: ApprovalStatus) => {
         const map: Record<string, string> = {
@@ -1306,13 +1384,27 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
         return map[s] || s;
       };
 
-      // Data rows
+      // --- REMPLISSAGE DES DONNÉES ---
       sortedRows.forEach((row, idx) => {
         const { doc, rev } = row;
 
+        const addDataRow = (data: any) => {
+          const excelRow = sheet.addRow(data);
+          excelRow.font = { name: 'Times New Roman', size: 9 };
+          excelRow.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+          excelRow.eachCell((cell) => {
+            cell.border = {
+              top: { style: 'thin' },
+              left: { style: 'thin' },
+              bottom: { style: 'thin' },
+              right: { style: 'thin' }
+            };
+          });
+        };
+
         if (rev.sendHistory && rev.sendHistory.length > 0) {
           rev.sendHistory.forEach(s => {
-            const dataRow = sheet.addRow({
+            addDataRow({
               num: idx + 1,
               lot: doc.lot,
               poste: doc.poste,
@@ -1330,11 +1422,9 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
               approvedSendRef: s.approvalRef || '',
               approvedReturnDate: rev.approvedReturnDate || '',
             });
-            dataRow.font = { size: 9 };
-            dataRow.alignment = { vertical: 'middle' };
           });
         } else {
-          const dataRow = sheet.addRow({
+          addDataRow({
             num: idx + 1,
             lot: doc.lot,
             poste: doc.poste,
@@ -1352,23 +1442,11 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
             approvedSendRef: rev.approvedSendRef || '',
             approvedReturnDate: rev.approvedReturnDate || '',
           });
-          dataRow.font = { size: 9 };
-          dataRow.alignment = { vertical: 'middle' };
         }
       });
 
-      // Auto-filter & borders
-      sheet.autoFilter = { from: 'A1', to: `P${sheet.rowCount}` };
-      sheet.eachRow((row) => {
-        row.eachCell((cell) => {
-          cell.border = {
-            top: { style: 'thin' },
-            left: { style: 'thin' },
-            bottom: { style: 'thin' },
-            right: { style: 'thin' },
-          };
-        });
-      });
+      // Auto-filter sur l'entête du tableau (Ligne 7)
+      sheet.autoFilter = { from: 'A7', to: `P${sheet.rowCount}` };
 
       const buffer = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -1564,11 +1642,15 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
                   </div>
               </div>
 
-              {/* Right: Empty Box */}
-              <div className="w-[20%] border-l-2 border-slate-900 relative bg-slate-50">
-                  <div className="absolute top-2 left-0 right-0 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                      Cadre Réservé Administration
-                  </div>
+              {/* Right: MDO Logo */}
+              <div className="w-[20%] border-l-2 border-slate-900 flex items-center justify-center p-2 relative bg-white">
+                  {appSettings.logoMDO ? (
+                      <img src={appSettings.logoMDO} alt="Logo MDO" className="w-full h-full object-contain" />
+                  ) : (
+                      <div className="text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                          Maitre d'Ouvrage
+                      </div>
+                  )}
               </div>
             </div>
         </div>
