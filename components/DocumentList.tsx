@@ -70,7 +70,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ documents, onAddDocu
   const isEditor = user?.role === 'editor';
   const isAdmin = user?.role === 'admin';
   const canModify = isAdmin || isEditor;
-  const canDelete = isAdmin;
+  const canDelete = isAdmin || isEditor;
 
   const [filter, setFilter] = useState<string>(initialFilter || 'ALL');
   const [natureFilter, setNatureFilter] = useState<string>('ALL');

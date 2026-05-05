@@ -825,7 +825,6 @@ export const BordereauView: React.FC<BordereauViewProps> = ({
         // --- 5. SIGNATURES ---
         const signatureTable = new Table({
             width: { size: 100, type: WidthType.PERCENTAGE },
-            spacing: { before: 0 }, 
             borders: transparentBorder, // Invisible container
             rows: [
                 new TableRow({

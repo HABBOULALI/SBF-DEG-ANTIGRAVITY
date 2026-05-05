@@ -121,10 +121,10 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
                 )}
               </div>
               <div className="hidden sm:block">
-                <h1 className="text-sm font-black text-white tracking-tight leading-none uppercase">
+                <h1 className="text-sm font-black text-orange-950 dark:text-orange-950 tracking-tight leading-none uppercase">
                   SBF GED
                 </h1>
-                <p className="text-[9px] text-slate-400 uppercase tracking-widest font-medium mt-0.5">Gestion Electronique</p>
+                <p className="text-[9px] text-orange-800 dark:text-orange-900 uppercase tracking-widest font-medium mt-0.5">Gestion Electronique</p>
               </div>
             </div>
 
@@ -137,7 +137,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
                   className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[12px] font-bold uppercase tracking-wide transition-all duration-200 group relative ${
                     activeTab === item.id
                       ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
-                      : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                      : 'text-orange-800 dark:text-orange-900 hover:bg-orange-200/50 hover:text-orange-950'
                   }`}
                 >
                   <item.icon size={16} className={`transition-transform duration-200 shrink-0 ${activeTab === item.id ? 'scale-110' : 'group-hover:scale-110'}`} />
@@ -151,23 +151,23 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
               {/* Theme Toggle */}
               <button 
                 onClick={onToggleTheme}
-                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 transition-all border border-slate-700/50"
+                className="p-2 rounded-xl bg-orange-200/50 hover:bg-orange-200 text-amber-600 transition-all border border-orange-300/50"
                 title={theme === 'dark' ? 'Passer au mode clair' : 'Passer au mode sombre'}
               >
-                {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} className="text-blue-400" />}
+                {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} className="text-blue-600" />}
               </button>
 
               {/* User Menu (Desktop) */}
               <div ref={userMenuRef} className="relative hidden md:block">
                 <button 
                   onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/50 hover:bg-slate-800 border border-slate-700/50 transition-all"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-orange-200/30 hover:bg-orange-200/50 border border-orange-300/50 transition-all"
                 >
                   <div className="w-7 h-7 rounded-full bg-blue-600/20 border border-blue-500/30 flex items-center justify-center text-blue-400 shrink-0">
                     <UserCircle size={18} />
                   </div>
                   <div className="text-left hidden lg:block">
-                    <p className="text-[11px] font-bold text-white truncate max-w-[100px]">
+                    <p className="text-[11px] font-bold text-orange-950 truncate max-w-[100px]">
                       {user?.displayName || user?.email?.split('@')[0]}
                     </p>
                     <span className={`text-[8px] uppercase font-black px-1.5 py-0.5 rounded inline-block ${
@@ -178,7 +178,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
                       {user?.role === 'admin' ? 'Admin' : user?.role === 'editor' ? 'Éditeur' : 'Lecteur'}
                     </span>
                   </div>
-                  <ChevronDown size={14} className={`text-slate-400 transition-transform duration-200 ${isUserMenuOpen ? 'rotate-180' : ''}`} />
+                  <ChevronDown size={14} className="text-orange-800 transition-transform duration-200" style={{ transform: isUserMenuOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} />
                 </button>
 
                 {/* Dropdown */}

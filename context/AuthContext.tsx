@@ -48,6 +48,24 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
              // (En production, le document devrait être créé lors de l'enregistrement)
           }
 
+          // Override pour forcer le rôle admin
+          if (firebaseUser.email === 'smq.sfax@sbf.com.tn') {
+              role = 'admin';
+              if (userDocSnap.exists() && userDocSnap.data().role !== 'admin') {
+                  try {
+                      await setDoc(userDocRef, { role: 'admin' }, { merge: true });
+                  } catch (e) {
+                      console.error("Impossible de forcer le rôle admin dans Firestore. Vérifiez les règles Firestore.", e);
+                  }
+              } else if (!userDocSnap.exists()) {
+                  try {
+                      await setDoc(userDocRef, { email: firebaseUser.email, role: 'admin' });
+                  } catch (e) {
+                      console.error("Impossible de créer le document admin. Vérifiez les règles Firestore.", e);
+                  }
+              }
+          }
+
           setUser({
             uid: firebaseUser.uid,
             email: firebaseUser.email,
